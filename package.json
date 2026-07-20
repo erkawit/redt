@@ -1,0 +1,13 @@
+{
+  "name": "e-redt-online",
+  "version": "2.0.0",
+  "description": "e-REDT Online System for Requesting Extension of Detention",
+  "main": "index.html",
+  "scripts": {
+    "start": "serve -p 3000",
+    "dev": "serve -p 3000"
+  },
+  "dependencies": {
+    "serve": "^14.2.4"
+  }
+}

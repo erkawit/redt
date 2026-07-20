@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>e-REDT - ระบบยื่นคำร้องผัดฟ้องฝากขังออนไลน์</title>
+  
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  
+  <!-- SweetAlert2 -->
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+  
+  <!-- PDF.js for Client-side PDF Verification -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  
+  <!-- Custom Stylesheet -->
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- App Header Navbar (Hidden on Login screen) -->
+  <header id="appHeader" class="app-header" style="display: none;">
+    <div class="logo-container">
+      <img src="img/logo.png" alt="e-REDT Logo" class="brand-logo-img">
+      <div>
+        <div class="logo-title">e-REDT <span style="font-size:0.7rem; background: rgba(234,179,8,0.25); color: var(--accent-gold); padding:0.1rem 0.45rem; border-radius:4px; border:1px solid rgba(234,179,8,0.5);">ONLINE</span></div>
+        <div class="logo-subtitle">ระบบยื่นคำร้องผัดฟ้องฝากขังออนไลน์ จ.อุดรธานี</div>
+      </div>
+    </div>
+    
+    <div class="user-nav">
+      <div class="user-info">
+        <div id="userAvatar" class="user-avatar">U</div>
+        <div class="user-details">
+          <span id="userName" class="user-name">ผู้ใช้งาน</span>
+          <span id="userRoleBadge" class="user-role-badge">เจ้าหน้าที่</span>
+        </div>
+      </div>
+      <button onclick="handleLogout()" class="btn-logout">
+        <i class="fa-solid fa-right-from-bracket"></i> ออกจากระบบ
+      </button>
+    </div>
+  </header>
+
+  <!-- Main App Layout with Sidebar -->
+  <div id="appLayoutContainer" class="app-body-container" style="display: none;">
+    
+    <!-- Sidebar Menu -->
+    <aside id="sidebar" class="sidebar">
+      <div>
+        <div style="padding: 0.5rem 0.85rem 1rem; border-bottom: 1px solid rgba(255,255,255,0.1); margin-bottom: 0.75rem; text-align: center;">
+          <img src="img/logo.png" alt="Logo" style="height: 50px; width: auto; margin-bottom: 0.35rem;">
+          <div style="font-size: 0.75rem; color: var(--accent-gold); font-weight: 600;">e-REDT System</div>
+        </div>
+
+        <ul class="sidebar-menu">
+          <li class="sidebar-menu-category">เมนูหลัก</li>
+          <li>
+            <a id="navItemDashboard" href="#" onclick="switchView('dashboard', event)" class="sidebar-item active">
+              <i class="fa-solid fa-chart-line"></i> <span>แดชบอร์ด & ปฏิทิน</span>
+            </a>
+          </li>
+          <li>
+            <a id="navItemRequests" href="#" onclick="switchView('requests', event)" class="sidebar-item">
+              <i class="fa-solid fa-folder-open"></i> <span id="navItemRequestsLabel">รายการยื่นผัดฟ้องฝากขัง</span>
+            </a>
+          </li>
+          <li id="navCategoryAdmin" class="sidebar-menu-category" style="display: none;">ผู้ดูแลระบบ (Admin Only)</li>
+          <li id="navItemUsers" style="display: none;">
+            <a id="navItemUsersLink" href="#" onclick="switchView('admin', event)" class="sidebar-item">
+              <i class="fa-solid fa-users-gear"></i> <span>จัดการผู้ใช้งาน (Users)</span>
+            </a>
+          </li>
+          <li id="navItemGoogleSettings" style="display: none;">
+            <a id="navItemGoogleSettingsLink" href="#" onclick="openGoogleSettingsModal(event)" class="sidebar-item">
+              <i class="fa-solid fa-file-excel" style="color: #34d399;"></i> <span>เชื่อมต่อ Google Services</span>
+            </a>
+          </li>
+        </ul>
+      </div>
+
+      <div style="padding: 1rem 0.5rem; border-top: 1px solid rgba(255,255,255,0.1); font-size: 0.725rem; color: #94a3b8; text-align: center;">
+        e-REDT v2.0 Online<br>
+        <span style="color: var(--accent-gold);"><i class="fa-solid fa-circle-check"></i> Google Connected</span>
+      </div>
+    </aside>
+
+    <!-- Content Workspace -->
+    <main class="main-content">
+
+      <!-- 1. DASHBOARD & CALENDAR VIEW (รองรับสิทธิ Admin/Officer ดูภาพรวมทั้งหมด และ สิทธิ Police ดูเฉพาะสถานีตนเอง) -->
+      <div id="dashboardView" class="animate-fade-in" style="display: none;">
+        <div class="view-header">
+          <div class="view-title">
+            <h2 id="dashboardTitle"><i class="fa-solid fa-chart-line" style="color: var(--primary);"></i> แดชบอร์ดภาพรวมและปฏิทิน</h2>
+            <p id="dashboardSubtitle">สถิติตัวเลขและปฏิทินภาพรวมการยื่นคำร้องผัดฟ้องฝากขัง</p>
+          </div>
+          <button onclick="fetchLiveGoogleSheetData()" class="btn-secondary" style="width: auto;">
+            <i class="fa-solid fa-rotate" style="color: #ffffff;"></i> ซิงค์ Google Sheet
+          </button>
+        </div>
+
+        <!-- Top Stats Grid -->
+        <div class="stats-grid">
+          <div class="white-card stat-card">
+            <div class="stat-icon blue"><i class="fa-solid fa-folder-open"></i></div>
+            <div class="stat-info">
+              <div id="dashStatTotal" class="stat-value">0</div>
+              <div id="dashStatTotalLabel" class="stat-label">คำร้องทั้งหมด</div>
+            </div>
+          </div>
+          <div class="white-card stat-card">
+            <div class="stat-icon amber"><i class="fa-solid fa-clock"></i></div>
+            <div class="stat-info">
+              <div id="dashStatPending" class="stat-value">0</div>
+              <div class="stat-label">รอดาวน์โหลด</div>
+            </div>
+          </div>
+          <div class="white-card stat-card">
+            <div class="stat-icon emerald"><i class="fa-solid fa-circle-check"></i></div>
+            <div class="stat-info">
+              <div id="dashStatDownloaded" class="stat-value">0</div>
+              <div class="stat-label">ดาวน์โหลดแล้ว</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Interactive Calendar Panel -->
+        <div class="white-panel calendar-wrapper">
+          <div class="calendar-header">
+            <button class="calendar-nav-btn" onclick="changeMonth(-1)"><i class="fa-solid fa-chevron-left"></i></button>
+            <h3 id="calendarMonthTitle" style="font-size: 1.25rem; font-weight: 700;">กรกฎาคม 2569</h3>
+            <button class="calendar-nav-btn" onclick="changeMonth(1)"><i class="fa-solid fa-chevron-right"></i></button>
+          </div>
+
+          <div class="calendar-grid">
+            <div class="calendar-day-header">อา.</div>
+            <div class="calendar-day-header">จ.</div>
+            <div class="calendar-day-header">อ.</div>
+            <div class="calendar-day-header">พ.</div>
+            <div class="calendar-day-header">พฤ.</div>
+            <div class="calendar-day-header">ศ.</div>
+            <div class="calendar-day-header">ส.</div>
+          </div>
+
+          <div id="calendarGridDays" class="calendar-grid" style="margin-top: 0.5rem;">
+            <!-- Rendered via app.js -->
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. REQUESTS LIST VIEW (แยกตารางตำรวจ / ตาราง DataTables ศาล) -->
+      <div id="requestsView" class="animate-fade-in" style="display: none;">
+        
+        <!-- POLICE OFFICER REQUESTS SECTION -->
+        <div id="policeRequestsSection" style="display: none;">
+          <div class="view-header">
+            <div class="view-title">
+              <h2><i class="fa-solid fa-building-shield" style="color: var(--primary);"></i> รายการคำร้องผัดฟ้องฝากขังสถานี</h2>
+              <p id="policeStationSub">สังกัด: สภ.เมืองอุดรธานี</p>
+            </div>
+            <button id="addRequestBtn" onclick="openAddRequestModal()" class="btn-primary" style="width: auto;">
+              <i class="fa-solid fa-circle-plus"></i> ยื่นคำร้องผัดฟ้องฝากขังใหม่
+            </button>
+          </div>
+
+          <!-- Submission Time Window Status Banner -->
+          <div id="timeWindowBanner" style="padding: 0.85rem 1.25rem; border-radius: 0.75rem; margin-bottom: 1.25rem; font-size: 0.875rem; font-weight: 600; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;">
+            <!-- Rendered dynamically via app.js -->
+          </div>
+
+          <div class="white-panel" style="padding: 1.5rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.75rem;">
+              <h3 style="font-size: 1.1rem; font-weight: 700;"><i class="fa-solid fa-list-check"></i> ตารางติดตามสถานะคำร้องผัดฟ้องฝากขัง</h3>
+              <div style="position: relative;">
+                <input type="text" id="policeSearchInput" oninput="renderPoliceTable()" class="form-control" placeholder="ค้นหาเลขฝากขัง..." style="padding-left: 2.2rem; width: 220px;">
+                <i class="fa-solid fa-magnifying-glass" style="position: absolute; left: 0.8rem; top: 50%; transform: translateY(-50%); color: var(--text-muted); font-size: 0.85rem;"></i>
+              </div>
+            </div>
+
+            <div class="table-container">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>เลขฝากขัง</th>
+                    <th>สถานีตำรวจ</th>
+                    <th>จำนวนผู้ต้องหา</th>
+                    <th>วันที่ยื่น</th>
+                    <th>เอกสารคำร้อง PDF</th>
+                    <th>สถานะดาวน์โหลด</th>
+                    <th>ผู้ดาวน์โหลด / เวลา</th>
+                    <th>จัดการ</th>
+                  </tr>
+                </thead>
+                <tbody id="policeTableBody">
+                  <!-- Rendered via app.js -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- COURT & ADMIN REQUESTS DATATABLES SECTION -->
+        <div id="courtRequestsSection" style="display: none;">
+          <div class="view-header">
+            <div class="view-title">
+              <h2><i class="fa-solid fa-gavel" style="color: var(--primary);"></i> รายการยื่นผัดฟ้องฝากขังทั้งหมด</h2>
+              <p>เรียกดูข้อมูลสำนวนคำร้อง ค้นหา กรองสถานีตำรวจ และดาวน์โหลดเอกสาร PDF คำร้องเข้าสู่ระบบ</p>
+            </div>
+            <button onclick="fetchLiveGoogleSheetData()" class="btn-secondary" style="width: auto;">
+              <i class="fa-solid fa-rotate" style="color: #ffffff;"></i> ซิงค์ Google Sheet
+            </button>
+          </div>
+
+          <div class="white-panel" style="padding: 1.5rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; flex-wrap: wrap; gap: 1rem;">
+              <h3 style="font-size: 1.1rem; font-weight: 700;"><i class="fa-solid fa-table"></i> ตารางรายการยื่นผัดฟ้องฝากขังทุกสถานี</h3>
+              
+              <div style="display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center;">
+                <select id="courtStationFilter" onchange="renderCourtRequestsTable()" class="form-control" style="width: 180px;">
+                  <option value="">ทุกสถานีตำรวจ</option>
+                  <option value="สภ.เมืองอุดรธานี">สภ.เมืองอุดรธานี</option>
+                  <option value="สภ.กุมภวาปี">สภ.กุมภวาปี</option>
+                </select>
+
+                <select id="courtStatusFilter" onchange="renderCourtRequestsTable()" class="form-control" style="width: 160px;">
+                  <option value="">ทุกสถานะ</option>
+                  <option value="pending">รอดาวน์โหลด</option>
+                  <option value="downloaded">ดาวน์โหลดแล้ว</option>
+                </select>
+
+                <div style="position: relative;">
+                  <input type="text" id="courtSearchInput" oninput="renderCourtRequestsTable()" class="form-control" placeholder="ค้นหาเลขฝากขัง/สถานี..." style="padding-left: 2.2rem; width: 200px;">
+                  <i class="fa-solid fa-magnifying-glass" style="position: absolute; left: 0.8rem; top: 50%; transform: translateY(-50%); color: var(--text-muted); font-size: 0.85rem;"></i>
+                </div>
+              </div>
+            </div>
+
+            <div class="table-container">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>เลขฝากขัง</th>
+                    <th>สถานีตำรวจ</th>
+                    <th>จำนวนผู้ต้องหา</th>
+                    <th>วันเวลาที่ยื่นคำร้อง</th>
+                    <th>เอกสารคำร้อง PDF</th>
+                    <th>สถานะการดาวน์โหลด</th>
+                    <th>ผู้ดาวน์โหลด / เวลา</th>
+                    <th>ดาวน์โหลดคำร้อง</th>
+                  </tr>
+                </thead>
+                <tbody id="courtTableBody">
+                  <!-- Rendered via app.js -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 3. ADMIN CONTROL PANEL VIEW -->
+      <div id="adminView" class="animate-fade-in" style="display: none;">
+        <div class="view-header">
+          <div class="view-title">
+            <h2><i class="fa-solid fa-user-shield" style="color: var(--primary);"></i> ระบบจัดการผู้ใช้งานและสิทธิ (Admin Control)</h2>
+            <p>จัดการข้อมูลผู้ใช้งาน สิทธิการเข้าถึง และสังกัดสถานีตำรวจ</p>
+          </div>
+          <button onclick="openUserModal()" class="btn-primary" style="width: auto;">
+            <i class="fa-solid fa-user-plus"></i> เพิ่มผู้ใช้งานใหม่
+          </button>
+        </div>
+
+        <div class="white-panel" style="padding: 1.5rem;">
+          <h3 style="font-size: 1.1rem; font-weight: 700; margin-bottom: 1rem;"><i class="fa-solid fa-users-gear"></i> รายชื่อผู้ใช้งานในระบบ (ซิงค์ Google Sheet)</h3>
+          <div class="table-container">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Username</th>
+                  <th>ชื่อ-นามสกุล</th>
+                  <th>สิทธิ (Role)</th>
+                  <th>สังกัด (Station)</th>
+                  <th>สถานะใช้งาน</th>
+                  <th>จัดการ</th>
+                </tr>
+              </thead>
+              <tbody id="adminUserTableBody">
+                <!-- Users rendered by app.js -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- LOGIN VIEW CONTAINER -->
+  <div id="loginView" class="login-wrapper animate-fade-in">
+    <div class="login-card">
+      <div class="login-header">
+        <img src="img/logo.png" alt="e-REDT Logo">
+        <h1>ระบบ e-REDT</h1>
+        <p>Online System for Requesting Extension of Detention</p>
+      </div>
+
+      <form id="loginForm" onsubmit="handleLogin(event)">
+        <div class="form-group">
+          <label for="usernameInput"><i class="fa-solid fa-user"></i> ชื่อผู้ใช้งาน (Username)</label>
+          <input type="text" id="usernameInput" class="form-control" placeholder="ป้อนชื่อผู้ใช้งาน..." required>
+        </div>
+
+        <div class="form-group">
+          <label for="passwordInput"><i class="fa-solid fa-lock"></i> รหัสผ่าน (Password)</label>
+          <input type="password" id="passwordInput" class="form-control" placeholder="ป้อนรหัสผ่าน..." required>
+        </div>
+
+        <button type="submit" class="btn-primary" style="margin-top: 1.5rem;">
+          <i class="fa-solid fa-right-to-bracket"></i> เข้าสู่ระบบ
+        </button>
+      </form>
+
+      <div class="quick-login-box">
+        <div class="quick-login-title">คลิกปุ่มเพื่อทดสอบเข้าสู่ระบบตามสิทธิ (Quick Login)</div>
+        <div class="quick-login-grid">
+          <button type="button" class="btn-quick" onclick="quickLogin('police_udon')">
+            <i class="fa-solid fa-shield-halved" style="color: #dc2626;"></i> สภ.เมืองอุดรฯ
+          </button>
+          <button type="button" class="btn-quick" onclick="quickLogin('officer1')">
+            <i class="fa-solid fa-gavel" style="color: #2563eb;"></i> เจ้าหน้าที่ศาล
+          </button>
+          <button type="button" class="btn-quick" onclick="quickLogin('admin')">
+            <i class="fa-solid fa-user-gear" style="color: #ca8a04;"></i> ผู้ดูแลระบบ
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: DAY DETAIL REQUESTS (Calendar Click) -->
+  <div id="dayDetailModal" class="modal-overlay">
+    <div class="glass-panel modal-container" style="max-width: 750px;">
+      <div class="modal-header">
+        <h3 id="dayDetailTitle" style="font-size: 1.2rem; font-weight: 700;"><i class="fa-solid fa-calendar-day" style="color: var(--primary);"></i> รายการคำร้องวันที่ ...</h3>
+        <button onclick="closeModal('dayDetailModal')" class="modal-close"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+
+      <div class="table-container">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>เลขฝากขัง</th>
+              <th>สถานีตำรวจ</th>
+              <th>จำนวนผู้ต้องหา</th>
+              <th>เอกสาร PDF</th>
+              <th>สถานะดาวน์โหลด</th>
+              <th>ดาวน์โหลดคำร้อง</th>
+            </tr>
+          </thead>
+          <tbody id="dayDetailTableBody">
+            <!-- Day items rendered by app.js -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: ADD DETENTION EXTENSION REQUEST (Police) -->
+  <div id="addRequestModal" class="modal-overlay">
+    <div class="glass-panel modal-container">
+      <div class="modal-header">
+        <h3 style="font-size: 1.2rem; font-weight: 700;"><i class="fa-solid fa-file-arrow-up" style="color: var(--primary);"></i> ยื่นคำร้องผัดฟ้องฝากขังใหม่</h3>
+        <button onclick="closeModal('addRequestModal')" class="modal-close"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+
+      <form onsubmit="handleCreateRequest(event)">
+        <div class="form-group">
+          <label for="detentionNoInput"><i class="fa-solid fa-hashtag"></i> เลขฝากขัง (เช่น ฝ.123/2569)</label>
+          <input type="text" id="detentionNoInput" class="form-control" placeholder="ระบุเลขฝากขัง..." required>
+        </div>
+
+        <div class="form-group">
+          <label for="suspectCountInput"><i class="fa-solid fa-users"></i> จำนวนผู้ต้องหาที่จะส่งตัวมาผัดฟ้องฝากขัง (คน)</label>
+          <input type="number" id="suspectCountInput" min="1" step="1" value="1" oninput="this.value = !!this.value && Math.abs(this.value) >= 1 ? Math.abs(this.value) : 1" class="form-control" placeholder="ระบุจำนวนผู้ต้องหา..." required>
+          <small style="font-size: 0.75rem; color: var(--text-muted);">กรอกได้เฉพาะตัวเลขเท่านั้น (ค่าเริ่มต้นคือ 1)</small>
+        </div>
+
+        <div class="form-group">
+          <label><i class="fa-solid fa-file-pdf"></i> แนบไฟล์คำร้อง PDF (ขนาด < 25MB, DPI >= 150)</label>
+          <div id="dropzone" class="dropzone" onclick="document.getElementById('pdfFileInput').click()">
+            <i class="fa-solid fa-cloud-arrow-up dropzone-icon"></i>
+            <div id="dropzoneText" style="font-size: 0.9rem; font-weight: 600;">คลิก หรือ ลากไฟล์ PDF มาวางที่นี่</div>
+            <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">รองรับเฉพาะไฟล์ .pdf เท่านั้น</div>
+          </div>
+          <input type="file" id="pdfFileInput" accept="application/pdf" style="display: none;" onchange="handleFileSelected(this.files[0])">
+        </div>
+
+        <div id="pdfValidationStatus" style="display: none; padding: 0.75rem 1rem; border-radius: 0.5rem; margin-bottom: 1.25rem; font-size: 0.825rem;">
+          <!-- Inserted dynamically -->
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 1.5rem;">
+          <button type="button" onclick="closeModal('addRequestModal')" class="btn-secondary">ยกเลิก</button>
+          <button type="submit" id="submitRequestBtn" class="btn-primary" style="width: auto;" disabled>
+            <i class="fa-solid fa-paper-plane"></i> ยื่นคำร้องและอัปโหลดไป Google Drive
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: ADD/EDIT USER (Admin) -->
+  <div id="userModal" class="modal-overlay">
+    <div class="glass-panel modal-container">
+      <div class="modal-header">
+        <h3 id="userModalTitle" style="font-size: 1.2rem; font-weight: 700;"><i class="fa-solid fa-user-gear" style="color: var(--primary);"></i> เพิ่มผู้ใช้งานใหม่</h3>
+        <button onclick="closeModal('userModal')" class="modal-close"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+
+      <form onsubmit="handleSaveUser(event)">
+        <input type="hidden" id="editUsernameOriginal">
+
+        <div class="form-group">
+          <label for="modalUsernameInput">Username</label>
+          <input type="text" id="modalUsernameInput" class="form-control" placeholder="ป้อน Username..." required>
+        </div>
+
+        <div class="form-group">
+          <label for="modalNameInput">ชื่อ-นามสกุล</label>
+          <input type="text" id="modalNameInput" class="form-control" placeholder="ป้อนชื่อและนามสกุล..." required>
+        </div>
+
+        <div class="form-group">
+          <label for="modalPasswordInput">รหัสผ่าน (Password)</label>
+          <input type="password" id="modalPasswordInput" class="form-control" placeholder="ป้อนรหัสผ่านใหม่...">
+        </div>
+
+        <div class="form-group">
+          <label for="modalRoleSelect">สิทธิการใช้งาน (Role)</label>
+          <select id="modalRoleSelect" class="form-control" onchange="toggleStationSelect(this.value)">
+            <option value="police">เจ้าหน้าที่ตำรวจ (Police)</option>
+            <option value="officer">เจ้าหน้าที่ศาล (Court Officer)</option>
+            <option value="admin">ผู้ดูแลระบบ (Admin)</option>
+          </select>
+        </div>
+
+        <div id="modalStationGroup" class="form-group">
+          <label for="modalStationInput">สังกัดสถานีตำรวจ</label>
+          <input type="text" id="modalStationInput" class="form-control" placeholder="เช่น สภ.เมืองอุดรธานี">
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 1.5rem;">
+          <button type="button" onclick="closeModal('userModal')" class="btn-secondary">ยกเลิก</button>
+          <button type="submit" class="btn-primary" style="width: auto;">บันทึกข้อมูล (Google Sheet: users)</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: GOOGLE SERVICES INTEGRATION SETTINGS -->
+  <div id="googleSettingsModal" class="modal-overlay">
+    <div class="glass-panel modal-container" style="max-width: 650px;">
+      <div class="modal-header">
+        <h3 style="font-size: 1.2rem; font-weight: 700;"><i class="fa-solid fa-file-excel" style="color: #059669;"></i> ตั้งค่าการเชื่อมต่อ Google Sheets & Drive</h3>
+        <button onclick="closeModal('googleSettingsModal')" class="modal-close"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+
+      <form onsubmit="saveGoogleSettings(event)">
+        <div class="form-group">
+          <label for="googleSheetUrlInput"><i class="fa-solid fa-link"></i> Google Sheet Published CSV URL (สำหรับอ่านข้อมูล)</label>
+          <input type="url" id="googleSheetUrlInput" class="form-control" placeholder="https://docs.google.com/spreadsheets/d/.../pub?output=csv">
+          <small style="font-size: 0.75rem; color: var(--text-muted);">
+            ดึงข้อมูลคำร้องและรายชื่อผู้ใช้จาก Google Sheet (ID: 1Y-OA9B8cPRwTcILCB9lmLny2GrfcEnNqR5i07lTGDM4)
+          </small>
+        </div>
+
+        <div class="form-group">
+          <label for="googleScriptUrlInput"><i class="fa-solid fa-cloud-arrow-up"></i> Google Apps Script Web App Endpoint URL (สำหรับบันทึกและอัปโหลด PDF)</label>
+          <input type="url" id="googleScriptUrlInput" class="form-control" placeholder="https://script.google.com/macros/s/.../exec">
+          <small style="font-size: 0.75rem; color: var(--text-muted);">
+            วาง URL ของ Google Apps Script ที่ Deploy เป็น Web App แล้ว เพื่อรับไฟล์ PDF และบันทึกแถวลง Tab: data / users
+          </small>
+        </div>
+
+        <div style="padding: 0.75rem; background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 0.5rem; font-size: 0.8rem; color: #047857; margin-bottom: 1.25rem;">
+          <i class="fa-solid fa-circle-check"></i> <b>สถานะการเชื่อมต่อ:</b> Google Sheet ID: <code>1Y-OA9B8cPRwTcILCB9lmLny2GrfcEnNqR5i07lTGDM4</code> พร้อมใช้งานแล้ว
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 0.75rem;">
+          <button type="button" onclick="closeModal('googleSettingsModal')" class="btn-secondary">ยกเลิก</button>
+          <button type="submit" class="btn-primary" style="width: auto;">บันทึกการตั้งค่า</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Custom JavaScript Logic -->
+  <script src="app.js"></script>
+</body>
+</html>
