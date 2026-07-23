@@ -704,11 +704,13 @@ function showLoginView() {
 }
 
 function renderAppLayout() {
+  if (!currentUser) return;
+
   document.getElementById('loginView').style.display = 'none';
   document.getElementById('appHeader').style.display = 'flex';
   document.getElementById('appLayoutContainer').style.display = 'flex';
 
-  document.getElementById('userName').textContent = currentUser.name;
+  document.getElementById('userName').textContent = currentUser.name || '';
   
   const roleNames = { admin: 'ผู้ดูแลระบบ', officer: 'เจ้าหน้าที่ศาล', police: 'พนักงานสอบสวน' };
   document.getElementById('userRoleBadge').textContent = roleNames[currentUser.role] || currentUser.role;
@@ -732,6 +734,12 @@ function renderAppLayout() {
   document.getElementById('navCategoryAdmin').style.display = (currentUser.role === 'admin') ? 'block' : 'none';
   document.getElementById('navItemUsers').style.display = (currentUser.role === 'admin') ? 'block' : 'none';
   document.getElementById('navItemGoogleSettings').style.display = (currentUser.role === 'admin') ? 'block' : 'none';
+
+  // Control Sync Button Visibility (Admin only)
+  const btnSync = document.getElementById('btnSyncGoogleSheet');
+  if (btnSync) {
+    btnSync.style.display = (currentUser.role === 'admin') ? 'inline-flex' : 'none';
+  }
 
   // Restore Last Active View on Refresh
   const hashView = (window.location.hash || '').replace('#', '').trim();
