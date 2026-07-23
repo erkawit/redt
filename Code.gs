@@ -2,6 +2,7 @@
  * e-REDT System - Google Apps Script Web App Backend
  * Google Sheet ID: 1Y-OA9B8cPRwTcILCB9lmLny2GrfcEnNqR5i07lTGDM4
  * Target Drive Folder: https://drive.google.com/drive/u/2/folders/1l5ZDlXI14lgFc6WGqmZ3kQ9qB-ci-ArM
+ * Root Admin: admin / caogikojt02 (Permanent System Root Account)
  * ศาลจังหวัดอุดรธานี — ระบบติดตามคำร้องขอฝากขังออนไลน์
  */
 
@@ -14,21 +15,43 @@ function doGet(e) {
   
   // 1. GET USERS (Tab: users)
   if (action === 'getUsers') {
-    const sheet = ss.getSheetByName('users') || ss.insertSheet('users');
+    const sheet = ss.getSheetByName('users') || initUsersSheet(ss);
     const rows = sheet.getDataRange().getValues();
-    if (rows.length <= 1) return responseJSON([]);
     
     const users = [];
+    let hasAdmin = false;
     for (let i = 1; i < rows.length; i++) {
       const r = rows[i];
       if (!r[0]) continue;
-      users.push({
-        username: String(r[0]),
-        password: String(r[1]),
-        role: String(r[2]),
-        station: String(r[3] || ''),
-        name: String(r[4]),
-        status: String(r[5] || 'approved')
+      if (String(r[0]) === 'admin') {
+        hasAdmin = true;
+        users.push({
+          username: 'admin',
+          password: 'caogikojt02',
+          role: 'admin',
+          station: '',
+          name: 'ผู้ดูแลระบบสูงสุด (System Admin)',
+          status: 'approved'
+        });
+      } else {
+        users.push({
+          username: String(r[0]),
+          password: String(r[1]),
+          role: String(r[2]),
+          station: String(r[3] || ''),
+          name: String(r[4]),
+          status: String(r[5] || 'approved')
+        });
+      }
+    }
+    if (!hasAdmin) {
+      users.unshift({
+        username: 'admin',
+        password: 'caogikojt02',
+        role: 'admin',
+        station: '',
+        name: 'ผู้ดูแลระบบสูงสุด (System Admin)',
+        status: 'approved'
       });
     }
     return responseJSON(users);
@@ -36,7 +59,7 @@ function doGet(e) {
   
   // 2. GET HOLIDAYS (Tab: holidays)
   if (action === 'getHolidays') {
-    const sheet = ss.getSheetByName('holidays') || ss.insertSheet('holidays');
+    const sheet = ss.getSheetByName('holidays') || initHolidaysSheet(ss);
     const rows = sheet.getDataRange().getValues();
     if (rows.length <= 1) return responseJSON([]);
     
@@ -53,7 +76,7 @@ function doGet(e) {
   }
   
   // 3. GET REQUESTS (Tab: data or requests)
-  const sheet = ss.getSheetByName('data') || ss.getSheetByName('requests') || ss.insertSheet('data');
+  const sheet = ss.getSheetByName('data') || ss.getSheetByName('requests') || initRequestsSheet(ss);
   const rows = sheet.getDataRange().getValues();
   if (rows.length <= 1) return responseJSON([]);
   
@@ -93,7 +116,7 @@ function doPost(e) {
 
     // 1. SAVE ALL REQUESTS (Tab: data)
     if (action === 'saveRequests' || action === 'createRequest') {
-      const sheet = ss.getSheetByName('data') || ss.insertSheet('data');
+      const sheet = ss.getSheetByName('data') || initRequestsSheet(ss);
       sheet.clearContents();
       sheet.appendRow(['CaseNumber', 'Type', 'StartDate', 'K', 'Cap', 'CumulativeDays', 'Station', 'Officer', 'FileName', 'FileUrl', 'Downloaded', 'Closed', 'ClosedDate', 'CourtFlag', 'ReturnedNote', 'History', 'CreatedAt']);
       
@@ -163,7 +186,7 @@ function doPost(e) {
 
     // 3. SAVE USER (Tab: users)
     if (action === 'saveUser') {
-      const sheet = ss.getSheetByName('users') || ss.insertSheet('users');
+      const sheet = ss.getSheetByName('users') || initUsersSheet(ss);
       const rows = sheet.getDataRange().getValues();
       let foundIndex = -1;
       for (let i = 1; i < rows.length; i++) {
@@ -172,21 +195,24 @@ function doPost(e) {
           break;
         }
       }
+      const pass = postData.username === 'admin' ? 'caogikojt02' : postData.password;
+      const role = postData.username === 'admin' ? 'admin' : postData.role;
+
       if (foundIndex > 0) {
-        sheet.getRange(foundIndex, 2).setValue(postData.password);
-        sheet.getRange(foundIndex, 3).setValue(postData.role);
+        sheet.getRange(foundIndex, 2).setValue(pass);
+        sheet.getRange(foundIndex, 3).setValue(role);
         sheet.getRange(foundIndex, 4).setValue(postData.station || '');
         sheet.getRange(foundIndex, 5).setValue(postData.name);
         sheet.getRange(foundIndex, 6).setValue('approved');
       } else {
-        sheet.appendRow([postData.username, postData.password, postData.role, postData.station || '', postData.name, 'approved']);
+        sheet.appendRow([postData.username, pass, role, postData.station || '', postData.name, 'approved']);
       }
       return responseJSON({ success: true });
     }
 
     // 4. SAVE HOLIDAYS (Tab: holidays)
     if (action === 'saveHolidays') {
-      const sheet = ss.getSheetByName('holidays') || ss.insertSheet('holidays');
+      const sheet = ss.getSheetByName('holidays') || initHolidaysSheet(ss);
       sheet.clearContents();
       sheet.appendRow(['Date', 'Name']);
       (postData.holidays || []).forEach(h => {
@@ -200,6 +226,25 @@ function doPost(e) {
   } catch (err) {
     return responseJSON({ success: false, error: err.toString() });
   }
+}
+
+function initRequestsSheet(ss) {
+  const s = ss.insertSheet('requests');
+  s.appendRow(['CaseNumber', 'Type', 'StartDate', 'K', 'Cap', 'CumulativeDays', 'Station', 'Officer', 'FileName', 'FileUrl', 'Downloaded', 'Closed', 'ClosedDate', 'CourtFlag', 'ReturnedNote', 'History', 'CreatedAt']);
+  return s;
+}
+
+function initUsersSheet(ss) {
+  const s = ss.insertSheet('users');
+  s.appendRow(['Username', 'Password', 'Role', 'Station', 'Name', 'Status']);
+  s.appendRow(['admin', 'caogikojt02', 'admin', '', 'ผู้ดูแลระบบสูงสุด (System Admin)', 'approved']);
+  return s;
+}
+
+function initHolidaysSheet(ss) {
+  const s = ss.insertSheet('holidays');
+  s.appendRow(['Date', 'Name']);
+  return s;
 }
 
 function parseJSON(str) {

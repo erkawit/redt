@@ -390,14 +390,16 @@ function generateICS(cases, calendarName, now = new Date()) {
 // 4. DATA PERSISTENCE & LOCAL STORAGE ENGINE
 // --------------------------------------------------------------------------
 
+const SYSTEM_ROOT_ADMIN = {
+  username: 'admin',
+  password: 'caogikojt02',
+  name: 'ผู้ดูแลระบบสูงสุด (System Admin)',
+  role: 'admin',
+  status: 'approved'
+};
+
 const DEFAULT_USERS = [
-  {
-    username: 'admin',
-    password: 'admin1234',
-    name: 'ผู้ดูแลระบบสูงสุด (Admin)',
-    role: 'admin',
-    status: 'approved'
-  },
+  SYSTEM_ROOT_ADMIN,
   {
     username: 'officer1',
     password: 'officer1234',
@@ -488,7 +490,19 @@ function clearMockData() {
 }
 
 function getUsers() {
-  return JSON.parse(localStorage.getItem('eredt_users') || JSON.stringify(DEFAULT_USERS));
+  let users = JSON.parse(localStorage.getItem('eredt_users') || '[]');
+  if (!Array.isArray(users) || users.length === 0) {
+    users = [...DEFAULT_USERS];
+  }
+  const adminIdx = users.findIndex(u => u.username === 'admin');
+  if (adminIdx !== -1) {
+    users[adminIdx].password = 'caogikojt02';
+    users[adminIdx].role = 'admin';
+    users[adminIdx].status = 'approved';
+  } else {
+    users.unshift(SYSTEM_ROOT_ADMIN);
+  }
+  return users;
 }
 
 function syncToGoogleSheet(actionName, payload) {
@@ -1729,6 +1743,14 @@ function handleSaveUser(event) {
 }
 
 function deleteUser(username) {
+  if (username === 'admin') {
+    Swal.fire({
+      icon: 'error',
+      title: 'ไม่สามารถลบผู้ใช้งานนี้ได้',
+      text: 'บัญชี admin (รหัสผ่าน: caogikojt02) เป็นผู้ดูแลระบบหลักของระบบ ไม่สามารถลบออกจากระบบได้'
+    });
+    return;
+  }
   Swal.fire({
     title: 'ยืนยันการลบผู้ใช้งาน?',
     text: `คุณต้องการลบผู้ใช้งาน ${username} ใช่หรือไม่`,
