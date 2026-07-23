@@ -1,19 +1,20 @@
 /**
- * e-REDT System - Google Apps Script Web App Backend (Full Single Source of Truth)
+ * e-REDT System - Google Apps Script Web App Backend
  * Google Sheet ID: 1Y-OA9B8cPRwTcILCB9lmLny2GrfcEnNqR5i07lTGDM4
+ * Target Drive Folder: https://drive.google.com/drive/u/2/folders/1l5ZDlXI14lgFc6WGqmZ3kQ9qB-ci-ArM
  * ศาลจังหวัดอุดรธานี — ระบบติดตามคำร้องขอฝากขังออนไลน์
  */
 
 const SPREADSHEET_ID = '1Y-OA9B8cPRwTcILCB9lmLny2GrfcEnNqR5i07lTGDM4';
-const PARENT_DRIVE_FOLDER_ID = ''; // ใส่ Folder ID ของ Google Drive ได้หากต้องการเก็บในโฟลเดอร์เฉพาะ
+const DEFAULT_DRIVE_FOLDER_ID = '1l5ZDlXI14lgFc6WGqmZ3kQ9qB-ci-ArM';
 
 function doGet(e) {
   const action = (e && e.parameter && e.parameter.action) ? e.parameter.action : 'getRequests';
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   
-  // 1. GET USERS
+  // 1. GET USERS (Tab: users)
   if (action === 'getUsers') {
-    const sheet = ss.getSheetByName('users') || initUsersSheet(ss);
+    const sheet = ss.getSheetByName('users') || ss.insertSheet('users');
     const rows = sheet.getDataRange().getValues();
     if (rows.length <= 1) return responseJSON([]);
     
@@ -33,9 +34,9 @@ function doGet(e) {
     return responseJSON(users);
   }
   
-  // 2. GET HOLIDAYS
+  // 2. GET HOLIDAYS (Tab: holidays)
   if (action === 'getHolidays') {
-    const sheet = ss.getSheetByName('holidays') || initHolidaysSheet(ss);
+    const sheet = ss.getSheetByName('holidays') || ss.insertSheet('holidays');
     const rows = sheet.getDataRange().getValues();
     if (rows.length <= 1) return responseJSON([]);
     
@@ -51,8 +52,8 @@ function doGet(e) {
     return responseJSON(holidays);
   }
   
-  // 3. GET REQUESTS (Default)
-  const sheet = ss.getSheetByName('requests') || initRequestsSheet(ss);
+  // 3. GET REQUESTS (Tab: data or requests)
+  const sheet = ss.getSheetByName('data') || ss.getSheetByName('requests') || ss.insertSheet('data');
   const rows = sheet.getDataRange().getValues();
   if (rows.length <= 1) return responseJSON([]);
   
@@ -60,9 +61,10 @@ function doGet(e) {
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
     if (!r[0]) continue;
+    
     requests.push({
       caseNumber: String(r[0]),
-      type: String(r[1]),
+      type: String(r[1] || 'ฝ.'),
       startDate: String(r[2]),
       k: Number(r[3]) || 2,
       cap: Number(r[4]) || 84,
@@ -89,25 +91,28 @@ function doPost(e) {
     const action = postData.action;
     const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
 
-    // SAVE ALL REQUESTS
-    if (action === 'saveRequests') {
-      const sheet = ss.getSheetByName('requests') || initRequestsSheet(ss);
+    // 1. SAVE ALL REQUESTS (Tab: data)
+    if (action === 'saveRequests' || action === 'createRequest') {
+      const sheet = ss.getSheetByName('data') || ss.insertSheet('data');
       sheet.clearContents();
       sheet.appendRow(['CaseNumber', 'Type', 'StartDate', 'K', 'Cap', 'CumulativeDays', 'Station', 'Officer', 'FileName', 'FileUrl', 'Downloaded', 'Closed', 'ClosedDate', 'CourtFlag', 'ReturnedNote', 'History', 'CreatedAt']);
       
-      const reqList = postData.requests || [];
+      const reqList = postData.requests || [postData];
       reqList.forEach(item => {
+        if (!item.caseNumber && item.detentionNo) item.caseNumber = item.detentionNo;
+        if (!item.caseNumber) return;
+
         sheet.appendRow([
           item.caseNumber,
-          item.type || '',
-          item.startDate || '',
+          item.type || 'ฝ.',
+          item.startDate || new Date().toISOString().split('T')[0],
           item.k || 2,
           item.cap || 84,
           item.cumulativeDays || 12,
-          item.station || '',
-          item.officer || '',
+          item.station || item.policeStation || '',
+          item.officer || item.officerName || '',
           item.fileName || '',
-          item.fileUrl || '',
+          item.fileUrl || item.driveLink || '',
           item.downloaded || false,
           item.closed || false,
           item.closedDate || '',
@@ -120,23 +125,33 @@ function doPost(e) {
       return responseJSON({ success: true, count: reqList.length });
     }
 
-    // UPLOAD PDF FILE TO GOOGLE DRIVE
+    // 2. UPLOAD PDF FILE TO GOOGLE DRIVE (Subfolder by สภ.)
     if (action === 'uploadFile') {
       let fileUrl = '';
       let fileName = postData.fileName;
+      const folderId = postData.driveFolderId || DEFAULT_DRIVE_FOLDER_ID;
 
       if (postData.fileData && postData.fileName) {
         const bytes = Utilities.base64Decode(postData.fileData.split(',')[1] || postData.fileData);
         const blob = Utilities.newBlob(bytes, 'application/pdf', postData.fileName);
         
-        let targetFolder = DriveApp.getRootFolder();
-        if (PARENT_DRIVE_FOLDER_ID) {
-          try { targetFolder = DriveApp.getFolderById(PARENT_DRIVE_FOLDER_ID); } catch(err){}
+        let targetFolder;
+        try {
+          targetFolder = DriveApp.getFolderById(folderId);
+        } catch (err) {
+          targetFolder = DriveApp.getRootFolder();
         }
         
-        const stationName = postData.station || 'ทั่วไป';
+        const stationName = postData.station || postData.policeStation || 'ทั่วไป';
         const folders = targetFolder.getFoldersByName(stationName);
-        let stationFolder = folders.hasNext() ? folders.next() : targetFolder.createFolder(stationName);
+        let stationFolder;
+        
+        // Use existing subfolder if found, otherwise create subfolder
+        if (folders.hasNext()) {
+          stationFolder = folders.next();
+        } else {
+          stationFolder = targetFolder.createFolder(stationName);
+        }
         
         const file = stationFolder.createFile(blob);
         file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
@@ -146,9 +161,9 @@ function doPost(e) {
       return responseJSON({ success: true, fileName: fileName, fileUrl: fileUrl });
     }
 
-    // SAVE USER
+    // 3. SAVE USER (Tab: users)
     if (action === 'saveUser') {
-      const sheet = ss.getSheetByName('users') || initUsersSheet(ss);
+      const sheet = ss.getSheetByName('users') || ss.insertSheet('users');
       const rows = sheet.getDataRange().getValues();
       let foundIndex = -1;
       for (let i = 1; i < rows.length; i++) {
@@ -169,9 +184,9 @@ function doPost(e) {
       return responseJSON({ success: true });
     }
 
-    // SAVE HOLIDAYS
+    // 4. SAVE HOLIDAYS (Tab: holidays)
     if (action === 'saveHolidays') {
-      const sheet = ss.getSheetByName('holidays') || initHolidaysSheet(ss);
+      const sheet = ss.getSheetByName('holidays') || ss.insertSheet('holidays');
       sheet.clearContents();
       sheet.appendRow(['Date', 'Name']);
       (postData.holidays || []).forEach(h => {
@@ -185,24 +200,6 @@ function doPost(e) {
   } catch (err) {
     return responseJSON({ success: false, error: err.toString() });
   }
-}
-
-function initRequestsSheet(ss) {
-  const s = ss.insertSheet('requests');
-  s.appendRow(['CaseNumber', 'Type', 'StartDate', 'K', 'Cap', 'CumulativeDays', 'Station', 'Officer', 'FileName', 'FileUrl', 'Downloaded', 'Closed', 'ClosedDate', 'CourtFlag', 'ReturnedNote', 'History', 'CreatedAt']);
-  return s;
-}
-
-function initUsersSheet(ss) {
-  const s = ss.insertSheet('users');
-  s.appendRow(['Username', 'Password', 'Role', 'Station', 'Name', 'Status']);
-  return s;
-}
-
-function initHolidaysSheet(ss) {
-  const s = ss.insertSheet('holidays');
-  s.appendRow(['Date', 'Name']);
-  return s;
 }
 
 function parseJSON(str) {

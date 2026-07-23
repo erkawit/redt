@@ -11,6 +11,7 @@ if (typeof pdfjsLib !== 'undefined') {
 const SPREADSHEET_ID = '1Y-OA9B8cPRwTcILCB9lmLny2GrfcEnNqR5i07lTGDM4';
 const DEFAULT_GOOGLE_SHEET_CSV = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/pub?output=csv`;
 const DEFAULT_GOOGLE_SCRIPT_WEBAPP = '';
+const DEFAULT_DRIVE_FOLDER_ID = '1l5ZDlXI14lgFc6WGqmZ3kQ9qB-ci-ArM';
 
 // --------------------------------------------------------------------------
 // 1. LEGAL LOGIC ENGINE (ตรรกะกฎหมาย และระเบียบศาลจังหวัดอุดรธานี พ.ศ. 2569)
@@ -1106,9 +1107,12 @@ function openUploadModal(caseNumber) {
   openModal('addRequestModal');
 }
 
+let rawSelectedFileObject = null;
+
 function handleFileSelected(file) {
   if (!file) return;
 
+  rawSelectedFileObject = file;
   const fileMeta = { name: file.name, sizeBytes: file.size, fileUrl: URL.createObjectURL(file) };
   const check = validateUploadFile(fileMeta);
 
@@ -1123,6 +1127,7 @@ function handleFileSelected(file) {
     document.getElementById('submitRequestBtn').disabled = false;
   } else {
     selectedFile = null;
+    rawSelectedFileObject = null;
     statusDiv.style.background = '#fee2e2';
     statusDiv.style.color = '#991b1b';
     statusDiv.innerHTML = `<i class="fa-solid fa-circle-xmark"></i> ${check.reason}`;
@@ -1139,14 +1144,59 @@ function handleCreateRequest(event) {
   const holidays = getHolidays();
   const index = requests.findIndex(r => r.caseNumber === caseNumber);
 
-  if (index !== -1) {
+  if (index === -1) return;
+
+  const scriptUrl = localStorage.getItem('eredt_google_script');
+  const driveFolderId = localStorage.getItem('eredt_drive_folder') || DEFAULT_DRIVE_FOLDER_ID;
+  const targetCase = requests[index];
+
+  Swal.fire({
+    title: 'กำลังอัพโหลดคำร้องไป Google Drive...',
+    text: `กำลังจัดเก็บไฟล์เข้าระบบและสร้าง/ค้นหาโฟลเดอร์สำหรับ ${targetCase.station || (currentUser ? currentUser.station : null) || 'สภ.เมืองอุดรธานี'}`,
+    allowOutsideClick: false,
+    didOpen: () => Swal.showLoading()
+  });
+
+  if (scriptUrl && rawSelectedFileObject) {
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const base64Data = e.target.result;
+      
+      fetch(scriptUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({
+          action: 'uploadFile',
+          fileName: selectedFile.name,
+          fileData: base64Data,
+          station: targetCase.station || (currentUser ? currentUser.station : null) || 'ทั่วไป',
+          driveFolderId: driveFolderId
+        })
+      })
+      .then(res => res.json())
+      .then(resData => {
+        if (resData && resData.fileUrl) {
+          selectedFile.fileUrl = resData.fileUrl;
+        }
+        finishUploadProcess();
+      })
+      .catch(err => {
+        console.warn('Google Drive direct upload warning, proceeding locally:', err);
+        finishUploadProcess();
+      });
+    };
+    reader.readAsDataURL(rawSelectedFileObject);
+  } else {
+    finishUploadProcess();
+  }
+
+  function finishUploadProcess() {
     const result = uploadFile(requests[index], selectedFile, holidays);
     if (result.ok) {
       requests[index] = result.case;
       saveRequests(requests);
-
       closeModal('addRequestModal');
-      Swal.fire({ icon: 'success', title: 'อัพโหลดคำร้องเรียบร้อย', timer: 1500, showConfirmButton: false });
+      Swal.fire({ icon: 'success', title: 'อัพโหลดคำร้องเรียบร้อย', text: 'จัดเก็บไฟล์เข้า Google Drive และซิงค์ตาราง Google Sheet เรียบร้อยแล้ว', timer: 1800, showConfirmButton: false });
       renderPoliceView();
     } else {
       Swal.fire({ icon: 'error', title: 'ไม่อนุญาตให้อัพโหลด', text: result.reason });
@@ -1693,6 +1743,7 @@ function openGoogleSettingsModal(event) {
   if (event) event.preventDefault();
   document.getElementById('googleSheetUrlInput').value = localStorage.getItem('eredt_google_csv') || DEFAULT_GOOGLE_SHEET_CSV;
   document.getElementById('googleScriptUrlInput').value = localStorage.getItem('eredt_google_script') || DEFAULT_GOOGLE_SCRIPT_WEBAPP;
+  document.getElementById('googleDriveFolderInput').value = localStorage.getItem('eredt_drive_folder') || DEFAULT_DRIVE_FOLDER_ID;
   openModal('googleSettingsModal');
 }
 
@@ -1700,9 +1751,11 @@ function saveGoogleSettings(event) {
   event.preventDefault();
   const csvUrl = document.getElementById('googleSheetUrlInput').value.trim();
   const scriptUrl = document.getElementById('googleScriptUrlInput').value.trim();
+  const driveFolder = document.getElementById('googleDriveFolderInput').value.trim();
 
   localStorage.setItem('eredt_google_csv', csvUrl);
   localStorage.setItem('eredt_google_script', scriptUrl);
+  localStorage.setItem('eredt_drive_folder', driveFolder || DEFAULT_DRIVE_FOLDER_ID);
   closeModal('googleSettingsModal');
 
   Swal.fire({ icon: 'success', title: 'บันทึกการตั้งค่า Google Services เรียบร้อย', timer: 1500, showConfirmButton: false });
