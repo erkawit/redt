@@ -1,19 +1,9 @@
 /* ==========================================================================
    e-REDT System - Pure JavaScript Application Engine (Web App Version)
-   Features:
-   1. Dashboard View:
-      - Admin & Officer: Stats & Interactive Calendar across ALL stations.
-      - Police Officer: Stats & Interactive Calendar for THEIR station ONLY.
-   2. Requests List View:
-      - Police: Station Request Table + Thailand Time Submission Window (08.30-16.00 Mon-Fri)
-      - Officer & Admin: DataTables Request Management View with Search & Download Buttons
-   3. Suspect Count Field (Default = 1, Numbers only)
-   4. Standalone Web App Execution (No Node.js required)
-   5. Google Apps Script Web App Integration (Tab: data & Drive Upload)
-   6. Non-admin users sync with Google Sheet (Tab: users)
+   ศาลจังหวัดอุดรธานี — ระบบติดตามคำร้องขอฝากขัง (ทางจอภาพ)
    ========================================================================== */
 
-// Configure PDF.js Worker
+// Configure PDF.js Worker if available
 if (typeof pdfjsLib !== 'undefined') {
   pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 }
@@ -23,7 +13,380 @@ const DEFAULT_GOOGLE_SHEET_CSV = `https://docs.google.com/spreadsheets/d/${SPREA
 const DEFAULT_GOOGLE_SCRIPT_WEBAPP = '';
 
 // --------------------------------------------------------------------------
-// 1. SEED DATA & LOCAL STORAGE ENGINE
+// 1. LEGAL LOGIC ENGINE (ตรรกะกฎหมาย และระเบียบศาลจังหวัดอุดรธานี พ.ศ. 2569)
+// --------------------------------------------------------------------------
+
+const DAYS_PER_OCCASION = 12; // ป.วิ.อาญา ม.87: ฝากขังได้ครั้งละไม่เกิน 12 วัน
+const FILING_CUTOFF_HOUR = 16; // ข้อ 6: ยื่นทางระบบได้ไม่เกิน 16.00 น.
+const PURGE_DAYS = 60;
+const CAP_MAX_K = { 48: 4, 84: 7 };
+const MAX_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024; // 20 MB
+const ALLOWED_UPLOAD_EXTENSION = ".pdf";
+
+// รายชื่อ 23 สถานีตำรวจในจังหวัดอุดรธานี
+const UDON_STATIONS = [
+  "สภ.เมืองอุดรธานี",
+  "สภ.กุมภวาปี",
+  "สภ.บ้านดุง",
+  "สภ.เพ็ญ",
+  "สภ.หนองหาน",
+  "สภ.กุดจับ",
+  "สภ.น้ำโสม",
+  "สภ.ศรีธาตุ",
+  "สภ.วังสามหมอ",
+  "สภ.โนนสะอาด",
+  "สภ.ไชยวาน",
+  "สภ.หนองวัวซอ",
+  "สภ.สร้างคอม",
+  "สภ.ทุ่งฝน",
+  "สภ.พิบูลย์รักษ์",
+  "สภ.นายูง",
+  "สภ.ประจักษ์ศิลปาคม",
+  "สภ.กุมภวาปี (สาขา)",
+  "สภ.ห้วยเกิ้ง",
+  "สภ.ดงเย็น",
+  "สภ.นาข่า",
+  "สภ.เมืองเพีย",
+  "สภ.ย่อยสามพร้าว"
+];
+
+// เดือนภาษาไทย
+const THAI_MONTHS_SHORT = [
+  "ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.",
+  "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."
+];
+
+const THAI_MONTHS_FULL = [
+  "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน",
+  "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"
+];
+
+// ใช้องค์ประกอบวันที่แบบ local time เสมอ ไม่ใช้ .toISOString()
+// พร้อมระบบป้องกันข้อผิดพลาด ป้องกันการเกิด "NaN-NaN-NaN"
+function toISO(date) {
+  if (!date) return toISO(new Date());
+  let d = date instanceof Date ? date : new Date(date);
+  if (isNaN(d.getTime())) {
+    if (typeof date === 'string' && date.includes('-')) {
+      const parts = date.split('-');
+      if (parts.length === 3) {
+        d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+      }
+    }
+  }
+  if (isNaN(d.getTime())) d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function fromISO(iso) {
+  if (!iso || typeof iso !== 'string' || iso.includes('NaN')) {
+    iso = toISO(new Date());
+  }
+  const parts = iso.split('-');
+  if (parts.length === 3) {
+    const y = parseInt(parts[0], 10);
+    const m = parseInt(parts[1], 10) - 1;
+    const d = parseInt(parts[2], 10);
+    if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
+      return new Date(y, m, d);
+    }
+  }
+  return new Date();
+}
+
+function formatThaiDate(iso, isLong = false) {
+  if (!iso || typeof iso !== "string" || iso.includes("NaN")) return "-";
+  const parts = iso.split("-");
+  if (parts.length !== 3) return iso;
+  const y = parseInt(parts[0], 10);
+  const m = parseInt(parts[1], 10) - 1;
+  const d = parseInt(parts[2], 10);
+
+  if (isNaN(y) || isNaN(m) || isNaN(d) || m < 0 || m > 11) return "-";
+
+  const thaiYear = y + 543;
+  const monthName = isLong ? THAI_MONTHS_FULL[m] : THAI_MONTHS_SHORT[m];
+  return `${d} ${monthName} ${thaiYear}`;
+}
+
+function addDays(date, n) {
+  const d = new Date(date);
+  d.setDate(d.getDate() + n);
+  return d;
+}
+
+function isWeekend(date) {
+  const day = date.getDay();
+  return day === 0 || day === 6;
+}
+
+function isHoliday(iso, holidays) {
+  return (holidays || []).some((h) => h.date === iso);
+}
+
+function adjustToBusinessDay(iso, holidays) {
+  let d = fromISO(iso);
+  while (isWeekend(d) || isHoliday(toISO(d), holidays)) {
+    d = addDays(d, -1);
+  }
+  return toISO(d);
+}
+
+function previousBusinessDay(iso, holidays) {
+  let d = addDays(fromISO(iso), -1);
+  while (isWeekend(d) || isHoliday(toISO(d), holidays)) {
+    d = addDays(d, -1);
+  }
+  return toISO(d);
+}
+
+function computeOccasionDeadlines(startISO, cumulativeDays, holidays) {
+  const daysAvailable = DAYS_PER_OCCASION;
+  const raw = toISO(addDays(fromISO(startISO), cumulativeDays));
+  const legalDeadline = adjustToBusinessDay(raw, holidays);
+  const filingDeadline = previousBusinessDay(legalDeadline, holidays);
+  return { rawDeadline: raw, legalDeadline, filingDeadline, daysAvailable };
+}
+
+function isPastCutoff(filingDeadlineISO, now = new Date()) {
+  const cutoff = fromISO(filingDeadlineISO);
+  cutoff.setHours(FILING_CUTOFF_HOUR, 0, 0, 0);
+  return now > cutoff;
+}
+
+function capMaxK(cap) {
+  return CAP_MAX_K[cap] || null;
+}
+
+function canFileNextOccasion(currentK, cap) {
+  const maxK = capMaxK(cap);
+  if (!maxK) return true;
+  return currentK < maxK;
+}
+
+function validateUploadFile(file) {
+  if (!file || !file.name) {
+    return { valid: false, reason: "ไม่พบไฟล์ที่จะอัพโหลด" };
+  }
+  if (!file.name.toLowerCase().endsWith(ALLOWED_UPLOAD_EXTENSION)) {
+    return { valid: false, reason: `รองรับเฉพาะไฟล์นามสกุล ${ALLOWED_UPLOAD_EXTENSION} เท่านั้น` };
+  }
+  if (typeof file.sizeBytes !== "number" || !Number.isFinite(file.sizeBytes) || file.sizeBytes <= 0) {
+    return { valid: false, reason: "ไม่สามารถอ่านขนาดไฟล์ได้ กรุณาลองใหม่" };
+  }
+  if (file.sizeBytes > MAX_UPLOAD_SIZE_BYTES) {
+    const maxMB = MAX_UPLOAD_SIZE_BYTES / (1024 * 1024);
+    return { valid: false, reason: `ไฟล์มีขนาดเกิน ${maxMB} MB กรุณาบีบอัดไฟล์หรือแยกเป็นหลายไฟล์แนบ` };
+  }
+  return { valid: true, reason: null };
+}
+
+// --------------------------------------------------------------------------
+// 2. CASE ENGINE (ชั้นตรรกะระดับคดี)
+// --------------------------------------------------------------------------
+
+function daysUntil(iso, now = new Date()) {
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  const target = fromISO(iso);
+  return Math.round((target - today) / 86400000);
+}
+
+function enrichCase(rawCase, holidays, now = new Date()) {
+  if (!rawCase.startDate || typeof rawCase.startDate !== 'string' || rawCase.startDate.includes('NaN')) {
+    rawCase.startDate = toISO(new Date());
+  }
+  const cumulativeDays = rawCase.cumulativeDays ?? (12 * ((rawCase.k || 2) - 1));
+  const { rawDeadline, legalDeadline, filingDeadline, daysAvailable } = computeOccasionDeadlines(rawCase.startDate, cumulativeDays, holidays);
+  const status = deriveStatus({ ...rawCase, filingDeadline }, now);
+  return { ...rawCase, cumulativeDays, daysAvailable, rawDeadline, legalDeadline, filingDeadline, status };
+}
+
+function deriveStatus(enrichedCase, now = new Date()) {
+  if (enrichedCase.closed) return "closed";
+  if (enrichedCase.fileName && enrichedCase.downloaded) return "downloaded";
+  if (enrichedCase.fileName) return "uploaded";
+  if (isPastCutoff(enrichedCase.filingDeadline, now)) return "blocked";
+  const d = daysUntil(enrichedCase.filingDeadline, now);
+  if (d < 0) return "overdue";
+  if (d <= 3) return "due";
+  return "wait";
+}
+
+function canUploadFile(rawCase, holidays, now = new Date()) {
+  if (rawCase.closed) return false;
+  const cumulativeDays = rawCase.cumulativeDays ?? (12 * ((rawCase.k || 2) - 1));
+  const { filingDeadline } = computeOccasionDeadlines(rawCase.startDate, cumulativeDays, holidays);
+  return !isPastCutoff(filingDeadline, now);
+}
+
+function uploadFile(rawCase, file, holidays, now = new Date()) {
+  const fileCheck = validateUploadFile(file);
+  if (!fileCheck.valid) {
+    return { case: rawCase, ok: false, reason: fileCheck.reason };
+  }
+  if (rawCase.closed) {
+    return { case: rawCase, ok: false, reason: "คดีนี้ปิดแล้ว ไม่สามารถอัพโหลดไฟล์เพิ่มได้" };
+  }
+  if (!canUploadFile(rawCase, holidays, now)) {
+    return { case: rawCase, ok: false, reason: "เลยเวลา 16.00 น. ของวันที่ต้องยื่นแล้ว กรุณานำคำร้องไปยื่นต่อศาลด้วยตนเอง" };
+  }
+  return { case: { ...rawCase, fileName: file.name, fileUrl: file.fileUrl || '', downloaded: false, courtFlag: null }, ok: true, reason: null };
+}
+
+function flagWrongFile(rawCase, reason, now = new Date()) {
+  if (rawCase.closed) {
+    return { case: rawCase, ok: false, reason: "คดีนี้ปิดแล้ว ไม่สามารถแจ้งไฟล์ผิดได้" };
+  }
+  if (!rawCase.fileName) {
+    return { case: rawCase, ok: false, reason: "คดีนี้ยังไม่มีไฟล์ที่อัพโหลดไว้ให้แจ้งว่าผิด" };
+  }
+  if (!reason || !reason.trim()) {
+    return { case: rawCase, ok: false, reason: "กรุณาระบุเหตุผลที่แจ้งว่าไฟล์ผิด" };
+  }
+  const courtFlag = { reason: reason.trim(), flaggedAt: toISO(now) };
+  return { case: { ...rawCase, courtFlag }, ok: true, reason: null };
+}
+
+function receiveOccasion(rawCase, holidays, newCap = null, actualDays = null, now = new Date()) {
+  if (!rawCase.fileName || !rawCase.downloaded) {
+    return rawCase;
+  }
+  if (rawCase.courtFlag) {
+    return rawCase;
+  }
+  const cap = newCap !== null ? Number(newCap) : (rawCase.cap || 84);
+  const cumulativeDays = rawCase.cumulativeDays ?? (12 * ((rawCase.k || 2) - 1));
+  const { legalDeadline, filingDeadline, daysAvailable } = computeOccasionDeadlines(rawCase.startDate, cumulativeDays, holidays);
+  const grantedDays = actualDays != null ? Math.max(1, Math.min(12, Number(actualDays))) : daysAvailable;
+  const newCumulativeDays = cumulativeDays + grantedDays;
+
+  const historyEntry = {
+    k: rawCase.k,
+    filingDeadline,
+    legalDeadline,
+    fileName: rawCase.fileName,
+    receivedDate: toISO(now),
+    daysGranted: grantedDays,
+  };
+  const history = [...(rawCase.history || []), historyEntry];
+
+  const maxK = cap === 48 ? 4 : cap === 84 ? 7 : 7;
+  if (rawCase.k >= maxK) {
+    return { ...rawCase, cap, cumulativeDays: newCumulativeDays, closed: true, closedDate: toISO(now), fileName: null, downloaded: false, history };
+  }
+  return { ...rawCase, cap, cumulativeDays: newCumulativeDays, k: rawCase.k + 1, fileName: null, downloaded: false, history };
+}
+
+function returnToPool(rawCase, reason, now = new Date()) {
+  if (rawCase.closed) {
+    return { case: rawCase, ok: false, reason: "คดีนี้ปิดแล้ว ไม่สามารถคืนสำนวนได้" };
+  }
+  if (rawCase.history && rawCase.history.length > 0) {
+    return { case: rawCase, ok: false, reason: "คดีนี้เคยถูกศาลรับเรื่องไปแล้วอย่างน้อยหนึ่งครั้ง ไม่สามารถคืนสำนวนผ่านระบบได้ กรุณาติดต่อเจ้าหน้าที่ศาลโดยตรง" };
+  }
+  const finalReason = (reason && reason.trim()) || "พนักงานสอบสวนแจ้งว่าไม่ใช่คดีของสถานีนี้";
+  const returnedNote = { reason: finalReason, returnedFromStation: rawCase.station, returnedAt: toISO(now) };
+  return {
+    case: { ...rawCase, station: null, officer: null, fileName: null, downloaded: false, courtFlag: null, returnedNote },
+    ok: true,
+    reason: null,
+  };
+}
+
+// --------------------------------------------------------------------------
+// 3. ICALENDAR FEED ENGINE (RFC 5545)
+// --------------------------------------------------------------------------
+
+function escapeICSText(text) {
+  return String(text || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/;/g, "\\;")
+    .replace(/,/g, "\\,")
+    .replace(/\n/g, "\\n");
+}
+
+function foldLine(line) {
+  if (line.length <= 75) return line;
+  const parts = [];
+  let rest = line;
+  while (rest.length > 75) {
+    parts.push(rest.slice(0, 75));
+    rest = " " + rest.slice(75);
+  }
+  parts.push(rest);
+  return parts.join("\r\n");
+}
+
+function toICSDateTime(isoDate, hour, minute) {
+  const safeIso = toISO(isoDate);
+  const [y, m, d] = safeIso.split("-");
+  const hh = String(hour).padStart(2, "0");
+  const mm = String(minute).padStart(2, "0");
+  return `${y}${m}${d}T${hh}${mm}00`;
+}
+
+function nowStampUTC(now = new Date()) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}T${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}Z`;
+}
+
+function buildEvent(caseItem, now) {
+  const uid = `case-${caseItem.caseNumber}-k${caseItem.k}@udon-remand-tracker`.replace(/[^a-zA-Z0-9@.\-]/g, "");
+  const dtStart = toICSDateTime(caseItem.filingDeadline, 9, 0);
+  const dtEnd = toICSDateTime(caseItem.filingDeadline, 10, 0);
+  const summary = escapeICSText(`ครบกำหนดยื่นคำร้องฝากขัง เลขคดี ${caseItem.caseNumber} ครั้งที่ ${caseItem.k}`);
+  const description = escapeICSText(
+    `สถานี: ${caseItem.station || 'ไม่ระบุ'}\nต้องยื่นภายในเวลา 16.00 น. ของวันนี้ (ข้อ 6 ระเบียบศาลจังหวัดอุดรธานี)\nครบกำหนดฝากขังจริง: ${formatThaiDate(caseItem.legalDeadline)}`
+  );
+
+  const lines = [
+    "BEGIN:VEVENT",
+    `UID:${uid}`,
+    `DTSTAMP:${nowStampUTC(now)}`,
+    `DTSTART:${dtStart}`,
+    `DTEND:${dtEnd}`,
+    `SUMMARY:${summary}`,
+    `DESCRIPTION:${description}`,
+    `LOCATION:${escapeICSText(caseItem.station || 'ศาลจังหวัดอุดรธานี')}`,
+    "BEGIN:VALARM",
+    "ACTION:DISPLAY",
+    "TRIGGER:-P1D",
+    `DESCRIPTION:${summary}`,
+    "END:VALARM",
+    "BEGIN:VALARM",
+    "ACTION:DISPLAY",
+    "TRIGGER:-PT2H",
+    `DESCRIPTION:${summary}`,
+    "END:VALARM",
+    "END:VEVENT",
+  ];
+  return lines.map(foldLine).join("\r\n");
+}
+
+function generateICS(cases, calendarName, now = new Date()) {
+  const header = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//Udon Provincial Court//Remand Tracker//TH",
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
+    `X-WR-CALNAME:${escapeICSText(calendarName)}`,
+    "X-WR-TIMEZONE:Asia/Bangkok",
+  ];
+  const events = (cases || [])
+    .filter((c) => !c.closed && c.filingDeadline)
+    .map((c) => buildEvent(c, now));
+  const footer = ["END:VCALENDAR"];
+
+  return [...header, ...events, ...footer].join("\r\n") + "\r\n";
+}
+
+// --------------------------------------------------------------------------
+// 4. DATA PERSISTENCE & LOCAL STORAGE ENGINE
 // --------------------------------------------------------------------------
 
 const DEFAULT_USERS = [
@@ -37,14 +400,14 @@ const DEFAULT_USERS = [
   {
     username: 'officer1',
     password: 'officer1234',
-    name: 'นายสมชาย ดีเลิศ (เจ้าหน้าที่ศาล)',
+    name: 'เจ้าหน้าที่ศาล สมชาย',
     role: 'officer',
     status: 'approved'
   },
   {
     username: 'police_udon',
     password: 'police1234',
-    name: 'ร.ต.อ.วิชาญ ใจกล้า',
+    name: 'ร.ต.อ.สมชาย ใจดี',
     role: 'police',
     station: 'สภ.เมืองอุดรธานี',
     status: 'approved'
@@ -52,46 +415,26 @@ const DEFAULT_USERS = [
   {
     username: 'police_kumphawapi',
     password: 'police1234',
-    name: 'ด.ต.ทวี เกียรติคุณ',
+    name: 'ร.ต.อ.วิชัย มีสุข',
     role: 'police',
     station: 'สภ.กุมภวาปี',
     status: 'approved'
   }
 ];
 
-const DEFAULT_REQUESTS = [
-  {
-    id: 'req_101',
-    detentionNo: 'ฝ.101/2569',
-    suspectCount: 1,
-    driveLink: 'https://drive.google.com/file/d/1Y-OA9B8cPRwTcILCB9lmLny2GrfcEnNqR5i07lTGDM4/view',
-    downloadStatus: true,
-    officerName: 'นายสมชาย ดีเลิศ (เจ้าหน้าที่ศาล)',
-    downloadTimestamp: '2026-07-20 09:30:15',
-    policeStation: 'สภ.เมืองอุดรธานี',
-    createdBy: 'police_udon',
-    createdAt: '2026-07-20T08:15:00'
-  },
-  {
-    id: 'req_102',
-    detentionNo: 'ฝ.102/2569',
-    suspectCount: 2,
-    driveLink: 'https://drive.google.com/file/d/1Y-OA9B8cPRwTcILCB9lmLny2GrfcEnNqR5i07lTGDM4/view',
-    downloadStatus: false,
-    policeStation: 'สภ.เมืองอุดรธานี',
-    createdBy: 'police_udon',
-    createdAt: '2026-07-20T10:45:00'
-  },
-  {
-    id: 'req_103',
-    detentionNo: 'ฝ.201/2569',
-    suspectCount: 1,
-    driveLink: 'https://drive.google.com/file/d/1Y-OA9B8cPRwTcILCB9lmLny2GrfcEnNqR5i07lTGDM4/view',
-    downloadStatus: false,
-    policeStation: 'สภ.กุมภวาปี',
-    createdBy: 'police_kumphawapi',
-    createdAt: '2026-07-20T11:20:00'
-  }
+const DEFAULT_HOLIDAYS = [
+  { date: "2026-01-01", name: "วันขึ้นปีใหม่" },
+  { date: "2026-04-13", name: "วันสงกรานต์" },
+  { date: "2026-04-14", name: "วันสงกรานต์" },
+  { date: "2026-04-15", name: "วันสงกรานต์" },
+  { date: "2026-05-04", name: "วันฉัตรมงคล" },
+  { date: "2026-07-28", name: "วันเฉลิมพระชนมพรรษา" },
+  { date: "2026-08-12", name: "วันแม่แห่งชาติ" },
+  { date: "2026-10-13", name: "วันคล้ายวันสวรรคต ร.9" },
+  { date: "2026-10-23", name: "วันปิยมหาราช" },
+  { date: "2026-12-05", name: "วันพ่อแห่งชาติ" },
+  { date: "2026-12-10", name: "วันรัฐธรรมนูญ" },
+  { date: "2026-12-31", name: "วันสิ้นปี" }
 ];
 
 function initDatabase() {
@@ -99,7 +442,10 @@ function initDatabase() {
     localStorage.setItem('eredt_users', JSON.stringify(DEFAULT_USERS));
   }
   if (!localStorage.getItem('eredt_requests')) {
-    localStorage.setItem('eredt_requests', JSON.stringify(DEFAULT_REQUESTS));
+    localStorage.setItem('eredt_requests', JSON.stringify([]));
+  }
+  if (!localStorage.getItem('eredt_holidays')) {
+    localStorage.setItem('eredt_holidays', JSON.stringify(DEFAULT_HOLIDAYS));
   }
   if (!localStorage.getItem('eredt_google_csv')) {
     localStorage.setItem('eredt_google_csv', DEFAULT_GOOGLE_SHEET_CSV);
@@ -109,8 +455,39 @@ function initDatabase() {
   }
 }
 
+function clearMockData() {
+  Swal.fire({
+    title: 'ยืนยันการล้างข้อมูลทดสอบ?',
+    text: 'การดำเนินการนี้จะลบรายการคดีคำร้องทดสอบทั้งหมดในระบบ และเตรียมพร้อมสำหรับการนำเข้าข้อมูลจริง',
+    icon: 'warning',
+    showCancelButton: true,
+    confirmButtonColor: '#dc2626',
+    cancelButtonColor: '#64748b',
+    confirmButtonText: 'ล้างข้อมูลทดสอบทั้งหมด',
+    cancelButtonText: 'ยกเลิก'
+  }).then((result) => {
+    if (result.isConfirmed) {
+      localStorage.setItem('eredt_requests', JSON.stringify([]));
+      Swal.fire({
+        icon: 'success',
+        title: 'ล้างข้อมูลสำเร็จ',
+        text: 'ระบบได้รับการรีเซ็ตเป็น 0 คดี พร้อมสำหรับการรับข้อมูลคำร้องจริงเรียบร้อยแล้ว',
+        timer: 2000,
+        showConfirmButton: false
+      });
+      if (typeof currentActiveView !== 'undefined') {
+        if (currentActiveView === 'dashboard') renderDashboard();
+        else if (currentActiveView === 'requests') {
+          if (currentUser.role === 'police') renderPoliceView();
+          else renderCourtView();
+        }
+      }
+    }
+  });
+}
+
 function getUsers() {
-  return JSON.parse(localStorage.getItem('eredt_users') || '[]');
+  return JSON.parse(localStorage.getItem('eredt_users') || JSON.stringify(DEFAULT_USERS));
 }
 
 function saveUsers(users) {
@@ -118,21 +495,39 @@ function saveUsers(users) {
 }
 
 function getRequests() {
-  return JSON.parse(localStorage.getItem('eredt_requests') || '[]');
+  const reqs = JSON.parse(localStorage.getItem('eredt_requests') || '[]');
+  // Sanitize existing cases if any contain invalid date strings
+  let modified = false;
+  reqs.forEach(r => {
+    if (!r.startDate || r.startDate.includes('NaN')) {
+      r.startDate = toISO(new Date());
+      modified = true;
+    }
+  });
+  if (modified) saveRequests(reqs);
+  return reqs;
 }
 
 function saveRequests(requests) {
   localStorage.setItem('eredt_requests', JSON.stringify(requests));
 }
 
+function getHolidays() {
+  return JSON.parse(localStorage.getItem('eredt_holidays') || JSON.stringify(DEFAULT_HOLIDAYS));
+}
+
+function saveHolidays(holidays) {
+  localStorage.setItem('eredt_holidays', JSON.stringify(holidays));
+}
+
 // Global Application State
 let currentUser = null;
 let selectedFile = null;
-let currentDate = new Date(2026, 6, 20); // Default July 2026
+let currentDate = new Date();
 let currentActiveView = 'dashboard';
 
 // --------------------------------------------------------------------------
-// 2. TIME WINDOW VALIDATOR (08.30 - 16.00 น. จันทร์ - ศุกร์ เวลาไทย)
+// 5. TIME WINDOW & STATUS BANNER
 // --------------------------------------------------------------------------
 
 function checkTimeWindow() {
@@ -140,15 +535,15 @@ function checkTimeWindow() {
   const thaiTimeString = now.toLocaleString('en-US', { timeZone: 'Asia/Bangkok' });
   const thaiDate = new Date(thaiTimeString);
 
-  const day = thaiDate.getDay(); // 0 = Sunday, 6 = Saturday
+  const day = thaiDate.getDay(); // 0 = Sun, 6 = Sat
   const hour = thaiDate.getHours();
   const minute = thaiDate.getMinutes();
 
   const totalMinutes = hour * 60 + minute;
-  const startWindow = 8 * 60 + 30; // 08:30 = 510 minutes
-  const endWindow = 16 * 60;       // 16:00 = 960 minutes
+  const startWindow = 8 * 60 + 30; // 08:30
+  const endWindow = 16 * 60;       // 16:00
 
-  const isWeekday = (day >= 1 && day <= 5); // Monday to Friday
+  const isWeekday = (day >= 1 && day <= 5);
   const isWithinTime = (totalMinutes >= startWindow && totalMinutes <= endWindow);
 
   const formattedTime = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')} น.`;
@@ -165,7 +560,7 @@ function checkTimeWindow() {
   if (!isWithinTime) {
     return {
       isOpen: false,
-      reason: `ระบบเปิดรับคำร้องระหว่างเวลา 08.30 - 16.00 น. เท่านั้น (${dayNames[day]} เวลา ${formattedTime})`,
+      reason: `ระบบเปิดรับคำร้องยื่นอิเล็กทรอนิกส์ระหว่างเวลา 08.30 - 16.00 น. เท่านั้น (${dayNames[day]} เวลา ${formattedTime})`,
       timeStr: formattedTime
     };
   }
@@ -179,8 +574,7 @@ function checkTimeWindow() {
 
 function updateTimeWindowBanner() {
   const banner = document.getElementById('timeWindowBanner');
-  const addBtn = document.getElementById('addRequestBtn');
-  if (!banner || !addBtn) return;
+  if (!banner) return;
 
   const timeCheck = checkTimeWindow();
 
@@ -197,9 +591,6 @@ function updateTimeWindowBanner() {
         เวลาปัจจุบัน: ${timeCheck.timeStr}
       </div>
     `;
-    addBtn.disabled = false;
-    addBtn.style.opacity = '1';
-    addBtn.style.cursor = 'pointer';
   } else {
     banner.style.background = '#fee2e2';
     banner.style.border = '1px solid #fca5a5';
@@ -207,20 +598,17 @@ function updateTimeWindowBanner() {
     banner.innerHTML = `
       <div>
         <i class="fa-solid fa-circle-xmark" style="color: #dc2626; font-size: 1.1rem; margin-right: 0.35rem;"></i>
-        <b>สถานะระบบ: ปิดรับคำร้อง</b> (${timeCheck.reason})
+        <b>สถานะระบบ: ปิดรับคำร้องทางระบบ</b> (${timeCheck.reason})
       </div>
       <div style="font-size: 0.8rem; background: #dc2626; color: #ffffff; padding: 0.2rem 0.6rem; border-radius: 999px;">
         เวลาปัจจุบัน: ${timeCheck.timeStr}
       </div>
     `;
-    addBtn.disabled = true;
-    addBtn.style.opacity = '0.6';
-    addBtn.style.cursor = 'not-allowed';
   }
 }
 
 // --------------------------------------------------------------------------
-// 3. AUTHENTICATION & NAVIGATION ENGINE
+// 6. AUTHENTICATION & NAVIGATION
 // --------------------------------------------------------------------------
 
 function checkSession() {
@@ -249,11 +637,9 @@ function handleLogin(event) {
     Swal.fire({
       icon: 'success',
       title: 'เข้าสู่ระบบสำเร็จ',
-      text: `ยินดีต้อนรับ ${user.name}`,
+      text: `ยินดีต้อนรับ คุณ${user.name}`,
       timer: 1500,
-      showConfirmButton: false,
-      background: '#ffffff',
-      color: '#0f172a'
+      showConfirmButton: false
     });
 
     renderAppLayout();
@@ -261,251 +647,292 @@ function handleLogin(event) {
     Swal.fire({
       icon: 'error',
       title: 'เข้าสู่ระบบไม่สำเร็จ',
-      text: 'ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง',
-      background: '#ffffff',
-      color: '#0f172a'
+      text: 'ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง'
     });
   }
 }
 
-function quickLogin(username) {
+function quickLogin(roleOrUser) {
   const users = getUsers();
-  const user = users.find(u => u.username === username);
+  let user = null;
+  if (roleOrUser === 'officer1') user = users.find(u => u.username === 'officer1');
+  else if (roleOrUser === 'police_udon') user = users.find(u => u.username === 'police_udon');
+  else if (roleOrUser === 'police_kumphawapi') user = users.find(u => u.username === 'police_kumphawapi');
+  else if (roleOrUser === 'admin') user = users.find(u => u.username === 'admin');
+
   if (user) {
-    document.getElementById('usernameInput').value = user.username;
-    document.getElementById('passwordInput').value = user.password;
-    document.getElementById('loginForm').dispatchEvent(new Event('submit'));
+    currentUser = user;
+    sessionStorage.setItem('eredt_session', JSON.stringify(user));
+    renderAppLayout();
   }
 }
 
 function handleLogout() {
+  currentUser = null;
   sessionStorage.removeItem('eredt_session');
   sessionStorage.removeItem('eredt_last_view');
-  currentUser = null;
-  document.body.classList.remove('theme-police');
+  if (window.location.hash) {
+    history.replaceState(null, null, ' ');
+  }
   showLoginView();
 }
 
 function showLoginView() {
+  document.getElementById('loginView').style.display = 'flex';
   document.getElementById('appHeader').style.display = 'none';
   document.getElementById('appLayoutContainer').style.display = 'none';
-  document.getElementById('loginView').style.display = 'flex';
 }
 
 function renderAppLayout() {
-  if (!currentUser) return;
-
-  // Header & User Info
+  document.getElementById('loginView').style.display = 'none';
   document.getElementById('appHeader').style.display = 'flex';
   document.getElementById('appLayoutContainer').style.display = 'flex';
-  document.getElementById('loginView').style.display = 'none';
-  
+
   document.getElementById('userName').textContent = currentUser.name;
-  document.getElementById('userAvatar').textContent = currentUser.name.charAt(0);
   
-  const roleBadge = document.getElementById('userRoleBadge');
-  
-  // Role specific theme accents & sidebar options
+  const roleNames = { admin: 'ผู้ดูแลระบบ', officer: 'เจ้าหน้าที่ศาล', police: 'พนักงานสอบสวน' };
+  document.getElementById('userRoleBadge').textContent = roleNames[currentUser.role] || currentUser.role;
+
+  // Theme styling
   if (currentUser.role === 'police') {
-    document.body.classList.add('theme-police');
-    roleBadge.textContent = `ตำรวจ (${currentUser.station || 'สภ.'})`;
-    document.getElementById('navItemRequestsLabel').textContent = 'รายการคำร้องสถานี';
-    document.getElementById('navCategoryAdmin').style.display = 'none';
-    document.getElementById('navItemUsers').style.display = 'none';
-    document.getElementById('navItemGoogleSettings').style.display = 'none';
+    document.body.className = 'theme-police';
   } else {
-    document.body.classList.remove('theme-police');
-    if (currentUser.role === 'admin') {
-      roleBadge.textContent = 'ผู้ดูแลระบบ (Admin)';
-      document.getElementById('navCategoryAdmin').style.display = 'block';
-      document.getElementById('navItemUsers').style.display = 'block';
-      document.getElementById('navItemGoogleSettings').style.display = 'block';
-      document.getElementById('navItemRequestsLabel').textContent = 'รายการยื่นผัดฟ้องฝากขัง';
-    } else {
-      roleBadge.textContent = 'เจ้าหน้าที่ศาล';
-      document.getElementById('navCategoryAdmin').style.display = 'none';
-      document.getElementById('navItemUsers').style.display = 'none';
-      document.getElementById('navItemGoogleSettings').style.display = 'none';
-      document.getElementById('navItemRequestsLabel').textContent = 'รายการยื่นผัดฟ้องฝากขัง';
-    }
+    document.body.className = '';
   }
 
-  // Restore last active view or default to dashboard
-  const savedLastView = sessionStorage.getItem('eredt_last_view') || 'dashboard';
-  switchView(savedLastView);
+  // Setup Sidebar Menus based on Role
+  document.getElementById('navCategoryCourt').style.display = (currentUser.role === 'officer' || currentUser.role === 'admin') ? 'block' : 'none';
+  document.getElementById('navItemCreateBatch').style.display = (currentUser.role === 'officer' || currentUser.role === 'admin') ? 'block' : 'none';
+  document.getElementById('navItemHolidays').style.display = (currentUser.role === 'officer' || currentUser.role === 'admin') ? 'block' : 'none';
+
+  document.getElementById('navCategoryPolice').style.display = (currentUser.role === 'police') ? 'block' : 'none';
+  document.getElementById('navItemStationInbox').style.display = (currentUser.role === 'police') ? 'block' : 'none';
+  document.getElementById('navItemDownloadICS').style.display = (currentUser.role === 'police') ? 'block' : 'none';
+
+  document.getElementById('navCategoryAdmin').style.display = (currentUser.role === 'admin') ? 'block' : 'none';
+  document.getElementById('navItemUsers').style.display = (currentUser.role === 'admin') ? 'block' : 'none';
+  document.getElementById('navItemGoogleSettings').style.display = (currentUser.role === 'admin') ? 'block' : 'none';
+
+  // Restore Last Active View on Refresh
+  const hashView = (window.location.hash || '').replace('#', '').trim();
+  let savedView = hashView || sessionStorage.getItem('eredt_last_view') || 'dashboard';
+  
+  if (savedView === 'admin' && currentUser.role !== 'admin') {
+    savedView = 'dashboard';
+  }
+  
+  switchView(savedView);
 }
 
-function switchView(viewName, event = null) {
-  if (event && event.preventDefault) {
-    event.preventDefault();
-  }
-
-  if (!currentUser) return;
-
-  // Security check for admin view
-  if (viewName === 'admin' && currentUser.role !== 'admin') {
-    viewName = 'dashboard';
-  }
+function switchView(viewName, event, subTab) {
+  if (event) event.preventDefault();
 
   currentActiveView = viewName;
   sessionStorage.setItem('eredt_last_view', viewName);
+  
+  try {
+    if (window.history && window.history.replaceState) {
+      window.history.replaceState(null, null, '#' + viewName);
+    } else {
+      window.location.hash = viewName;
+    }
+  } catch (e) {
+    // Ignore origin frame navigation warnings on file://
+  }
 
-  // Hide all view panels
   document.getElementById('dashboardView').style.display = 'none';
   document.getElementById('requestsView').style.display = 'none';
   document.getElementById('adminView').style.display = 'none';
 
-  // Remove active styling from all sidebar links
-  document.querySelectorAll('.sidebar-item').forEach(item => item.classList.remove('active'));
+  document.getElementById('navItemDashboard').classList.remove('active');
+  document.getElementById('navItemRequests').classList.remove('active');
+  if (document.getElementById('navItemUsersLink')) document.getElementById('navItemUsersLink').classList.remove('active');
 
   if (viewName === 'dashboard') {
-    const dashLink = document.getElementById('navItemDashboard');
-    if (dashLink) dashLink.classList.add('active');
-
     document.getElementById('dashboardView').style.display = 'block';
+    document.getElementById('navItemDashboard').classList.add('active');
     renderDashboard();
   } else if (viewName === 'requests') {
-    const reqLink = document.getElementById('navItemRequests');
-    if (reqLink) reqLink.classList.add('active');
-
     document.getElementById('requestsView').style.display = 'block';
-
+    document.getElementById('navItemRequests').classList.add('active');
+    
     if (currentUser.role === 'police') {
       document.getElementById('policeRequestsSection').style.display = 'block';
       document.getElementById('courtRequestsSection').style.display = 'none';
-      document.getElementById('policeStationSub').textContent = `สังกัด: ${currentUser.station || 'สภ.เมืองอุดรธานี'}`;
-      updateTimeWindowBanner();
-      renderPoliceTable();
+      renderPoliceView();
     } else {
       document.getElementById('policeRequestsSection').style.display = 'none';
       document.getElementById('courtRequestsSection').style.display = 'block';
-      renderCourtRequestsTable();
+      renderCourtView();
     }
-  } else if (viewName === 'admin' && currentUser.role === 'admin') {
-    const userLink = document.getElementById('navItemUsersLink');
-    if (userLink) userLink.classList.add('active');
-
+  } else if (viewName === 'admin') {
     document.getElementById('adminView').style.display = 'block';
-    renderAdminUserTable();
+    if (document.getElementById('navItemUsersLink')) document.getElementById('navItemUsersLink').classList.add('active');
+    renderAdminView();
   }
 }
 
 // --------------------------------------------------------------------------
-// 4. DASHBOARD & INTERACTIVE CALENDAR ENGINE (ROLE-AWARE)
+// 7. DASHBOARD & CALENDAR ENGINE
 // --------------------------------------------------------------------------
 
 function renderDashboard() {
-  const requests = getRequests();
+  const rawRequests = getRequests();
+  const holidays = getHolidays();
+  const enrichedCases = rawRequests.map(r => enrichCase(r, holidays));
 
-  // Filter requests based on role
-  // Admin & Officer: All stations
-  // Police Officer: ONLY their station
-  const isPolice = (currentUser.role === 'police');
-  const roleRequests = isPolice 
-    ? requests.filter(r => r.policeStation === currentUser.station)
-    : requests;
-
-  // Update Dashboard Titles
-  const titleElem = document.getElementById('dashboardTitle');
-  const subtitleElem = document.getElementById('dashboardSubtitle');
-  const totalLabelElem = document.getElementById('dashStatTotalLabel');
-
-  if (isPolice) {
-    titleElem.innerHTML = `<i class="fa-solid fa-chart-line" style="color: var(--primary);"></i> แดชบอร์ดภาพรวมและปฏิทิน (สภ. ${currentUser.station || ''})`;
-    subtitleElem.textContent = `แสดงสถิติตัวเลขและปฏิทินภาพรวมการยื่นผัดฟ้องฝากขังเฉพาะ ${currentUser.station || 'สภ.เมืองอุดรธานี'}`;
-    totalLabelElem.textContent = 'คำร้องทั้งหมดของสถานี';
+  let filteredCases = enrichedCases;
+  if (currentUser.role === 'police') {
+    filteredCases = enrichedCases.filter(c => c.officer === currentUser.username || c.station === currentUser.station);
+    document.getElementById('dashboardSubtitle').textContent = `ติดตามกำหนดเวลาสำหรับ สภ.: ${currentUser.station}`;
   } else {
-    titleElem.innerHTML = `<i class="fa-solid fa-chart-line" style="color: var(--primary);"></i> แดชบอร์ดภาพรวมและปฏิทิน (รวมทุกสถานีตำรวจ)`;
-    subtitleElem.textContent = 'แสดงสถิติตัวเลขและปฏิทินภาพรวมการยื่นผัดฟ้องฝากขังทั้งหมดทุกสถานีตำรวจ';
-    totalLabelElem.textContent = 'คำร้องในระบบทั้งหมด';
+    document.getElementById('dashboardSubtitle').textContent = `คำนวณวันยื่นล่วงหน้า 1 วันทำการและเวลาตัดยื่น 16.00 น. ตามระเบียบศาลจังหวัดอุดรธานี พ.ศ. 2569`;
   }
 
-  // Update Stats Cards
-  document.getElementById('dashStatTotal').textContent = roleRequests.length;
-  document.getElementById('dashStatPending').textContent = roleRequests.filter(r => !r.downloadStatus).length;
-  document.getElementById('dashStatDownloaded').textContent = roleRequests.filter(r => r.downloadStatus).length;
+  document.getElementById('dashStatTotal').textContent = filteredCases.length;
+  
+  const dueCases = filteredCases.filter(c => !c.closed && (c.status === 'due' || c.status === 'overdue'));
+  document.getElementById('dashStatDue').textContent = dueCases.length;
 
-  // Render Calendar
-  const year = currentDate.getFullYear();
-  const month = currentDate.getMonth();
+  const downloadedCases = filteredCases.filter(c => c.status === 'downloaded' || c.closed);
+  document.getElementById('dashStatDownloaded').textContent = downloadedCases.length;
 
-  const monthNames = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตลุาคม', 'พฤศจิกายน', 'ธันวาคม'];
-  document.getElementById('calendarMonthTitle').textContent = `${monthNames[month]} ${year + 543}`;
-
-  const firstDay = new Date(year, month, 1).getDay();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-
-  const grid = document.getElementById('calendarGridDays');
-  grid.innerHTML = '';
-
-  for (let i = 0; i < firstDay; i++) {
-    const blank = document.createElement('div');
-    blank.className = 'calendar-day-cell other-month';
-    grid.appendChild(blank);
-  }
-
-  for (let day = 1; day <= daysInMonth; day++) {
-    const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    
-    // Filter requests for this specific day
-    const dayRequests = roleRequests.filter(r => {
-      const rDate = r.createdAt.split('T')[0];
-      return rDate === dateStr;
-    });
-
-    const cell = document.createElement('div');
-    const isToday = (day === 20 && month === 6 && year === 2026);
-    cell.className = `calendar-day-cell ${isToday ? 'today' : ''}`;
-    cell.onclick = () => openDayDetailModal(dateStr, dayRequests);
-
-    cell.innerHTML = `
-      <div class="calendar-day-number">${day}</div>
-      ${dayRequests.length > 0 ? `<div class="calendar-day-count"><i class="fa-solid fa-file"></i> ${dayRequests.length} รายการ</div>` : ''}
-    `;
-
-    grid.appendChild(cell);
-  }
+  renderCalendar(filteredCases);
 }
 
-function changeMonth(delta) {
-  currentDate.setMonth(currentDate.getMonth() + delta);
+function changeMonth(offset) {
+  currentDate.setMonth(currentDate.getMonth() + offset);
   renderDashboard();
 }
 
-function openDayDetailModal(dateStr, dayRequests) {
-  document.getElementById('dayDetailTitle').innerHTML = `<i class="fa-solid fa-calendar-day" style="color: var(--primary);"></i> รายการคำร้องวันที่ ${dateStr}`;
+function renderCalendar(cases) {
+  const year = currentDate.getFullYear();
+  const month = currentDate.getMonth();
+
+  document.getElementById('calendarMonthTitle').textContent = `${THAI_MONTHS_FULL[month]} ${year + 543}`;
+
+  const firstDay = new Date(year, month, 1).getDay();
+  const totalDays = new Date(year, month + 1, 0).getDate();
+
+  const gridContainer = document.getElementById('calendarGridDays');
+  gridContainer.innerHTML = '';
+
+  // Blank padding days
+  for (let i = 0; i < firstDay; i++) {
+    const blank = document.createElement('div');
+    blank.className = 'calendar-day-cell blank';
+    gridContainer.appendChild(blank);
+  }
+
+  const holidays = getHolidays();
+  const todayISO = toISO(new Date());
+
+  for (let day = 1; day <= totalDays; day++) {
+    const dayDate = new Date(year, month, day);
+    const dayISO = toISO(dayDate);
+
+    const dayCell = document.createElement('div');
+    dayCell.className = 'calendar-day-cell';
+
+    const isToday = (dayISO === todayISO);
+    const isWknd = isWeekend(dayDate);
+    const isHolidy = isHoliday(dayISO, holidays);
+
+    if (isToday) dayCell.classList.add('today');
+    if (isWknd) dayCell.classList.add('weekend');
+    if (isHolidy) dayCell.classList.add('holiday');
+
+    // Header row inside day card
+    const headerRow = document.createElement('div');
+    headerRow.className = 'day-header-row';
+
+    const numberSpan = document.createElement('div');
+    numberSpan.className = 'calendar-day-number';
+    numberSpan.textContent = day;
+    headerRow.appendChild(numberSpan);
+
+    if (isToday) {
+      const todayBadge = document.createElement('span');
+      todayBadge.className = 'today-tag';
+      todayBadge.textContent = 'วันนี้';
+      headerRow.appendChild(todayBadge);
+    } else if (isHolidy) {
+      const holidayObj = holidays.find(h => h.date === dayISO);
+      const holiTag = document.createElement('span');
+      holiTag.className = 'holiday-tag';
+      holiTag.textContent = holidayObj ? holidayObj.name : 'วันหยุด';
+      headerRow.appendChild(holiTag);
+    }
+
+    dayCell.appendChild(headerRow);
+
+    // Cases matching filingDeadline or legalDeadline
+    const filingCases = cases.filter(c => c.filingDeadline === dayISO && !c.closed);
+    const legalCases = cases.filter(c => c.legalDeadline === dayISO && !c.closed);
+    const totalDayCases = cases.filter(c => c.filingDeadline === dayISO || c.legalDeadline === dayISO);
+
+    const badgesContainer = document.createElement('div');
+    badgesContainer.className = 'calendar-badges-container';
+
+    if (filingCases.length > 0) {
+      const fBadge = document.createElement('div');
+      fBadge.className = 'calendar-count-badge badge-filing';
+      fBadge.innerHTML = `<span><i class="fa-solid fa-clock"></i> ต้องยื่น</span> <span class="count-number-pill">${filingCases.length}</span>`;
+      badgesContainer.appendChild(fBadge);
+    }
+
+    if (legalCases.length > 0) {
+      const lBadge = document.createElement('div');
+      lBadge.className = 'calendar-count-badge badge-legal';
+      lBadge.innerHTML = `<span><i class="fa-solid fa-gavel"></i> ครบกำหนด</span> <span class="count-number-pill">${legalCases.length}</span>`;
+      badgesContainer.appendChild(lBadge);
+    }
+
+    if (totalDayCases.length > 0) {
+      dayCell.appendChild(badgesContainer);
+      dayCell.onclick = (e) => {
+        e.stopPropagation();
+        openDayDetailModal(dayISO);
+      };
+    } else {
+      dayCell.onclick = () => {
+        openDayDetailModal(dayISO);
+      };
+    }
+
+    gridContainer.appendChild(dayCell);
+  }
+}
+
+function openDayDetailModal(dayISO) {
+  const rawRequests = getRequests();
+  const holidays = getHolidays();
+  const enriched = rawRequests.map(r => enrichCase(r, holidays));
+
+  let filtered = enriched.filter(c => c.filingDeadline === dayISO || c.legalDeadline === dayISO);
+  if (currentUser.role === 'police') {
+    filtered = filtered.filter(c => c.station === currentUser.station);
+  }
+
+  document.getElementById('dayDetailTitle').textContent = `รายการคำร้องประจำวันที่ ${formatThaiDate(dayISO, true)}`;
   const tbody = document.getElementById('dayDetailTableBody');
   tbody.innerHTML = '';
 
-  if (dayRequests.length === 0) {
-    tbody.innerHTML = `
-      <tr>
-        <td colspan="6" style="text-align: center; padding: 2rem; color: var(--text-muted);">
-          ไม่มีคำร้องผัดฟ้องฝากขังในวันที่เลือก
-        </td>
-      </tr>
-    `;
+  if (filtered.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted);">ไม่มีรายการคำร้องในวันนี้</td></tr>`;
   } else {
-    dayRequests.forEach(req => {
+    filtered.forEach(c => {
+      const typeBadge = c.type === 'ยฝ.' ? '<span class="badge badge-type-yf">ยฝ.</span>' : '<span class="badge badge-type-f">ฝ.</span>';
       const tr = document.createElement('tr');
       tr.innerHTML = `
-        <td style="font-weight: 700; color: var(--primary);">${req.detentionNo}</td>
-        <td>${req.policeStation}</td>
-        <td style="font-weight: 600;">${req.suspectCount || 1} คน</td>
+        <td>${typeBadge}</td>
+        <td><b>${c.caseNumber}</b></td>
+        <td>${c.station || 'รอกำหนด'}</td>
+        <td>ครั้งที่ ${c.k}</td>
+        <td>${formatThaiDate(c.legalDeadline)}</td>
+        <td>${renderStatusBadge(c.status)}</td>
         <td>
-          <a href="${req.driveLink}" target="_blank" style="color: #2563eb; font-weight: 600; text-decoration: none;">
-            <i class="fa-solid fa-file-pdf" style="color:#dc2626;"></i> คำร้อง.pdf
-          </a>
-        </td>
-        <td>
-          ${req.downloadStatus 
-            ? `<span class="status-badge downloaded"><i class="fa-solid fa-check"></i> โหลดแล้ว (${req.officerName || 'เจ้าหน้าที่'})</span>` 
-            : '<span class="status-badge pending"><i class="fa-solid fa-clock"></i> รอดาวน์โหลด</span>'}
-        </td>
-        <td>
-          <button onclick="handleDownloadRequest('${req.id}')" class="btn-primary" style="padding: 0.35rem 0.75rem; font-size: 0.775rem;">
-            <i class="fa-solid fa-download"></i> ดาวน์โหลดคำร้อง
-          </button>
+          ${c.fileName ? `<a href="${c.fileUrl || '#'}" target="_blank" class="btn-secondary" style="padding: 0.2rem 0.5rem; font-size: 0.75rem;"><i class="fa-solid fa-file-pdf"></i> เปิดไฟล์</a>` : '-'}
         </td>
       `;
       tbody.appendChild(tr);
@@ -516,607 +943,737 @@ function openDayDetailModal(dateStr, dayRequests) {
 }
 
 // --------------------------------------------------------------------------
-// 5. POLICE DASHBOARD & REQUESTS ENGINE
+// 8. POLICE WORKFLOW & STATION INBOX
 // --------------------------------------------------------------------------
 
-function renderPoliceTable() {
-  const requests = getRequests();
-  const stationRequests = requests.filter(r => r.policeStation === currentUser.station);
-  const searchQuery = document.getElementById('policeSearchInput').value.toLowerCase().trim();
+function renderPoliceView() {
+  updateTimeWindowBanner();
+  document.getElementById('policeStationSub').textContent = `สังกัด: ${currentUser.station || 'ไม่ระบุ'}`;
 
-  const filtered = stationRequests.filter(r => 
-    r.detentionNo.toLowerCase().includes(searchQuery)
-  );
+  const rawRequests = getRequests();
+  const holidays = getHolidays();
+  const enriched = rawRequests.map(r => enrichCase(r, holidays));
+
+  // 1. Station Inbox: Unassigned cases for police's station
+  const stationInbox = enriched.filter(c => c.station === currentUser.station && !c.officer && !c.closed);
+  document.getElementById('stationInboxCount').textContent = `${stationInbox.length} คดีรอรับ`;
+
+  const inboxTbody = document.getElementById('stationInboxTableBody');
+  inboxTbody.innerHTML = '';
+
+  if (stationInbox.length === 0) {
+    inboxTbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">ไม่มีคดีใหม่รอรับเป็นเจ้าของในกล่องจดหมายสถานี</td></tr>`;
+  } else {
+    stationInbox.forEach(c => {
+      const typeBadge = c.type === 'ยฝ.' ? '<span class="badge badge-type-yf">ยฝ.</span>' : '<span class="badge badge-type-f">ฝ.</span>';
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${typeBadge}</td>
+        <td><b>${c.caseNumber}</b></td>
+        <td>${formatThaiDate(c.startDate)}</td>
+        <td>ครั้งที่ ${c.k}</td>
+        <td><b style="color: #b45309;">${formatThaiDate(c.filingDeadline)} (16.00 น.)</b></td>
+        <td>${formatThaiDate(c.legalDeadline)}</td>
+        <td>
+          <button onclick="claimForMe('${c.caseNumber}')" class="btn-primary" style="padding: 0.3rem 0.75rem; font-size: 0.8rem; width: auto;">
+            <i class="fa-solid fa-hand-holding-hand"></i> รับเป็นเจ้าของคดี
+          </button>
+        </td>
+      `;
+      inboxTbody.appendChild(tr);
+    });
+  }
+
+  // 2. My Registered Cases Table
+  renderPoliceTable();
+}
+
+function renderPoliceTable() {
+  const searchTerm = (document.getElementById('policeSearchInput')?.value || '').toLowerCase().trim();
+  const rawRequests = getRequests();
+  const holidays = getHolidays();
+  const enriched = rawRequests.map(r => enrichCase(r, holidays));
+
+  const myCases = enriched.filter(c => c.officer === currentUser.username && (c.caseNumber.toLowerCase().includes(searchTerm) || (c.station && c.station.toLowerCase().includes(searchTerm))));
 
   const tbody = document.getElementById('policeTableBody');
   tbody.innerHTML = '';
 
-  if (filtered.length === 0) {
-    tbody.innerHTML = `
-      <tr>
-        <td colspan="8" style="text-align: center; padding: 2.5rem; color: var(--text-muted);">
-          <i class="fa-solid fa-folder-open" style="font-size: 2rem; margin-bottom: 0.5rem; display: block;"></i>
-          ยังไม่มีรายการคำร้องผัดฟ้องฝากขังสำหรับสถานีนี้
+  if (myCases.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">ยังไม่มีคดีในทะเบียนส่วนตัวของคุณ (กดรับคดีจากกล่องจดหมายสถานีด้านบน)</td></tr>`;
+  } else {
+    myCases.forEach(c => {
+      const typeBadge = c.type === 'ยฝ.' ? '<span class="badge badge-type-yf">ยฝ.</span>' : '<span class="badge badge-type-f">ฝ.</span>';
+      const timeCheck = checkTimeWindow();
+      const isPast = isPastCutoff(c.filingDeadline);
+
+      let actionButtons = '';
+      if (!c.closed) {
+        if (isPast) {
+          actionButtons = `<span style="font-size: 0.75rem; color: #dc2626; font-weight: 600;"><i class="fa-solid fa-ban"></i> เลย 16.00 น. ต้องยื่นที่ศาลด้วยตนเอง</span>`;
+        } else {
+          actionButtons = `
+            <button onclick="openUploadModal('${c.caseNumber}')" class="btn-primary" style="padding: 0.3rem 0.65rem; font-size: 0.75rem; width: auto;">
+              <i class="fa-solid fa-upload"></i> ${c.fileName ? 'อัพโหลดไฟล์ใหม่ทับ' : 'อัพโหลด PDF'}
+            </button>
+          `;
+          if (!c.history || c.history.length === 0) {
+            actionButtons += `
+              <button onclick="openReturnModal('${c.caseNumber}')" class="btn-secondary" style="padding: 0.3rem 0.65rem; font-size: 0.75rem; width: auto; background-color: #d97706; border-color: #d97706; margin-left: 0.3rem;">
+                <i class="fa-solid fa-rotate-left"></i> คืนสำนวน
+              </button>
+            `;
+          }
+        }
+      } else {
+        actionButtons = `<span class="badge badge-status-closed">ปิดคดีแล้ว</span>`;
+      }
+
+      let flagWarning = '';
+      if (c.courtFlag) {
+        flagWarning = `
+          <div class="court-flag-banner">
+            <i class="fa-solid fa-triangle-exclamation"></i> <b>ศาลแจ้งไฟล์ผิด:</b> ${c.courtFlag.reason}
+          </div>
+        `;
+      }
+
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${typeBadge}</td>
+        <td><b>${c.caseNumber}</b></td>
+        <td>ครั้งที่ ${c.k}</td>
+        <td><b style="color: #b45309;">${formatThaiDate(c.filingDeadline)}</b></td>
+        <td>${formatThaiDate(c.legalDeadline)}</td>
+        <td>${c.cap || 84} วัน (${c.cap === 48 ? 4 : 7} ครั้ง)</td>
+        <td>
+          ${renderStatusBadge(c.status)}
+          ${c.fileName ? `<br><small style="color: var(--text-muted);">${c.fileName}</small>` : ''}
+          ${flagWarning}
         </td>
-      </tr>
-    `;
-    return;
+        <td>${actionButtons}</td>
+      `;
+      tbody.appendChild(tr);
+    });
   }
-
-  filtered.forEach(req => {
-    const tr = document.createElement('tr');
-    const formattedDate = new Date(req.createdAt).toLocaleString('th-TH');
-
-    tr.innerHTML = `
-      <td style="font-weight: 700; color: var(--primary);">${req.detentionNo}</td>
-      <td>${req.policeStation}</td>
-      <td style="font-weight: 600;">${req.suspectCount || 1} คน</td>
-      <td>${formattedDate}</td>
-      <td>
-        <a href="${req.driveLink}" target="_blank" style="color: #2563eb; font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; gap: 0.3rem;">
-          <i class="fa-solid fa-file-pdf" style="color:#dc2626;"></i> คำร้อง_${req.detentionNo}.pdf
-        </a>
-      </td>
-      <td>
-        ${req.downloadStatus 
-          ? '<span class="status-badge downloaded"><i class="fa-solid fa-circle-check"></i> ดาวน์โหลดแล้ว</span>' 
-          : '<span class="status-badge pending"><i class="fa-solid fa-clock"></i> รอดาวน์โหลด</span>'}
-      </td>
-      <td style="font-size: 0.8rem; color: var(--text-muted);">
-        ${req.downloadStatus ? `${req.officerName || 'เจ้าหน้าที่ศาล'}<br>${req.downloadTimestamp}` : '-'}
-      </td>
-      <td>
-        <button onclick="handleDeleteRequest('${req.id}')" class="btn-danger">
-          <i class="fa-solid fa-trash"></i> ลบ
-        </button>
-      </td>
-    `;
-    tbody.appendChild(tr);
-  });
 }
 
-function openAddRequestModal() {
-  const timeCheck = checkTimeWindow();
-  if (!timeCheck.isOpen) {
-    Swal.fire({
-      icon: 'error',
-      title: 'นอกเวลาทำการยื่นคำร้อง',
-      text: timeCheck.reason,
-      background: '#ffffff',
-      color: '#0f172a'
-    });
-    return;
+function claimForMe(caseNumber) {
+  const requests = getRequests();
+  const index = requests.findIndex(r => r.caseNumber === caseNumber);
+  if (index !== -1) {
+    requests[index].officer = currentUser.username;
+    saveRequests(requests);
+    Swal.fire({ icon: 'success', title: 'รับเป็นเจ้าของคดีเรียบร้อย', timer: 1200, showConfirmButton: false });
+    renderPoliceView();
   }
+}
+
+function openUploadModal(caseNumber) {
+  const requests = getRequests();
+  const c = requests.find(r => r.caseNumber === caseNumber);
+  if (!c) return;
+
+  document.getElementById('uploadCaseNumber').value = c.caseNumber;
+  document.getElementById('uploadCaseNumberDisplay').textContent = `เลขคดี: ${c.caseNumber}`;
+  document.getElementById('uploadCaseInfoDisplay').textContent = `ครั้งที่ ${c.k} | สภ.: ${c.station || 'ไม่ระบุ'}`;
 
   selectedFile = null;
-  document.getElementById('detentionNoInput').value = '';
-  document.getElementById('suspectCountInput').value = '1';
   document.getElementById('pdfFileInput').value = '';
-  document.getElementById('dropzoneText').innerHTML = 'คลิก หรือ ลากไฟล์ PDF มาวางที่นี่';
+  document.getElementById('dropzoneText').textContent = 'คลิก หรือ ลากไฟล์ PDF มาวางที่นี่';
   document.getElementById('pdfValidationStatus').style.display = 'none';
   document.getElementById('submitRequestBtn').disabled = true;
 
   openModal('addRequestModal');
 }
 
-async function handleFileSelected(file) {
+function handleFileSelected(file) {
   if (!file) return;
 
-  const statusBox = document.getElementById('pdfValidationStatus');
-  const dropzoneText = document.getElementById('dropzoneText');
-  const submitBtn = document.getElementById('submitRequestBtn');
+  const fileMeta = { name: file.name, sizeBytes: file.size, fileUrl: URL.createObjectURL(file) };
+  const check = validateUploadFile(fileMeta);
 
-  dropzoneText.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> กำลังตรวจสอบไฟล์ <b>${file.name}</b>...`;
-  statusBox.style.display = 'block';
-  statusBox.style.background = '#fef3c7';
-  statusBox.style.border = '1px solid #fde68a';
-  statusBox.style.color = '#b45309';
-  statusBox.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> กำลังตรวจสอบความสมบูรณ์ของ PDF และค่า DPI...';
+  const statusDiv = document.getElementById('pdfValidationStatus');
+  statusDiv.style.display = 'block';
 
-  // 1. Check File Type
-  if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
-    statusBox.style.background = '#fee2e2';
-    statusBox.style.border = '1px solid #fca5a5';
-    statusBox.style.color = '#991b1b';
-    statusBox.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> ข้อผิดพลาด: ไฟล์ต้องเป็นประเภท PDF (.pdf) เท่านั้น';
-    submitBtn.disabled = true;
-    return;
-  }
-
-  // 2. Check File Size (< 25MB)
-  const MAX_SIZE = 25 * 1024 * 1024;
-  if (file.size > MAX_SIZE) {
-    statusBox.style.background = '#fee2e2';
-    statusBox.style.border = '1px solid #fca5a5';
-    statusBox.style.color = '#991b1b';
-    statusBox.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> ข้อผิดพลาด: ขนาดไฟล์ (${(file.size / (1024*1024)).toFixed(2)} MB) เกิน 25 MB`;
-    submitBtn.disabled = true;
-    return;
-  }
-
-  // 3. Client-side PDF Resolution Verification
-  try {
-    const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-    const page = await pdf.getPage(1);
-    const viewport = page.getViewport({ scale: 1.0 });
-
-    const dpiEstimate = Math.round((viewport.width / 595.28) * 150);
-
-    statusBox.style.background = '#d1fae5';
-    statusBox.style.border = '1px solid #a7f3d0';
-    statusBox.style.color = '#047857';
-    statusBox.innerHTML = `<i class="fa-solid fa-circle-check"></i> ตรวจสอบผ่านสำเร็จ: ไฟล์ PDF (${pdf.numPages} หน้า, ความละเอียด ~${Math.max(dpiEstimate, 150)} DPI, ขนาด ${(file.size / (1024*1024)).toFixed(2)} MB)`;
-
-    selectedFile = file;
-    dropzoneText.innerHTML = `<i class="fa-solid fa-file-pdf" style="color: #059669;"></i> <b>${file.name}</b> (${(file.size / (1024*1024)).toFixed(2)} MB)`;
-    submitBtn.disabled = false;
-  } catch (err) {
-    statusBox.style.background = '#d1fae5';
-    statusBox.style.border = '1px solid #a7f3d0';
-    statusBox.style.color = '#047857';
-    statusBox.innerHTML = `<i class="fa-solid fa-circle-check"></i> ตรวจสอบผ่าน: ไฟล์ PDF ถูกต้อง (${(file.size / (1024*1024)).toFixed(2)} MB)`;
-    selectedFile = file;
-    dropzoneText.innerHTML = `<i class="fa-solid fa-file-pdf" style="color: #059669;"></i> <b>${file.name}</b>`;
-    submitBtn.disabled = false;
+  if (check.valid) {
+    selectedFile = fileMeta;
+    statusDiv.style.background = '#d1fae5';
+    statusDiv.style.color = '#047857';
+    statusDiv.innerHTML = `<i class="fa-solid fa-circle-check"></i> ไฟล์ถูกต้อง: <b>${file.name}</b> (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
+    document.getElementById('submitRequestBtn').disabled = false;
+  } else {
+    selectedFile = null;
+    statusDiv.style.background = '#fee2e2';
+    statusDiv.style.color = '#991b1b';
+    statusDiv.innerHTML = `<i class="fa-solid fa-circle-xmark"></i> ${check.reason}`;
+    document.getElementById('submitRequestBtn').disabled = true;
   }
 }
 
-async function handleCreateRequest(event) {
+function handleCreateRequest(event) {
   event.preventDefault();
-  
-  // Re-verify time window before submitting
-  const timeCheck = checkTimeWindow();
-  if (!timeCheck.isOpen) {
-    Swal.fire({ icon: 'error', title: 'นอกเวลาทำการยื่นคำร้อง', text: timeCheck.reason, background: '#ffffff', color: '#0f172a' });
-    return;
-  }
+  const caseNumber = document.getElementById('uploadCaseNumber').value;
+  if (!selectedFile) return;
 
-  const detentionNo = document.getElementById('detentionNoInput').value.trim();
-  const suspectCountVal = parseInt(document.getElementById('suspectCountInput').value) || 1;
-  const suspectCount = Math.max(1, suspectCountVal);
-
-  if (!detentionNo || !selectedFile) {
-    Swal.fire({ icon: 'warning', title: 'โปรดกรอกข้อมูลให้ครบถ้วน', text: 'ระบุเลขฝากขังและแนบไฟล์ PDF', background: '#ffffff', color: '#0f172a' });
-    return;
-  }
-
-  // Create request object
   const requests = getRequests();
-  const newRequest = {
-    id: 'req_' + Date.now(),
-    detentionNo: detentionNo,
-    suspectCount: suspectCount,
-    driveLink: 'https://drive.google.com/file/d/1Y-OA9B8cPRwTcILCB9lmLny2GrfcEnNqR5i07lTGDM4/view',
-    downloadStatus: false,
-    policeStation: currentUser.station || 'สภ.เมืองอุดรธานี',
-    createdBy: currentUser.username,
-    createdAt: new Date().toISOString()
-  };
+  const holidays = getHolidays();
+  const index = requests.findIndex(r => r.caseNumber === caseNumber);
 
-  requests.unshift(newRequest);
-  saveRequests(requests);
+  if (index !== -1) {
+    const result = uploadFile(requests[index], selectedFile, holidays);
+    if (result.ok) {
+      requests[index] = result.case;
+      saveRequests(requests);
 
-  // Sync with Google Apps Script Web App if Endpoint URL is configured
-  const scriptUrl = localStorage.getItem('eredt_google_script');
-  if (scriptUrl) {
-    try {
-      const reader = new FileReader();
-      reader.readAsDataURL(selectedFile);
-      reader.onload = function() {
-        const base64Data = reader.result;
-        fetch(scriptUrl, {
-          method: 'POST',
-          mode: 'no-cors',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'createRequest',
-            id: newRequest.id,
-            detentionNo: newRequest.detentionNo,
-            suspectCount: newRequest.suspectCount,
-            policeStation: newRequest.policeStation,
-            createdBy: newRequest.createdBy,
-            createdAt: newRequest.createdAt,
-            fileName: selectedFile.name,
-            fileData: base64Data
-          })
-        }).catch(err => console.log('Google Script POST sent'));
-      };
-    } catch (err) {
-      console.log('Syncing to Google Apps Script Web App:', err);
+      closeModal('addRequestModal');
+      Swal.fire({ icon: 'success', title: 'อัพโหลดคำร้องเรียบร้อย', timer: 1500, showConfirmButton: false });
+      renderPoliceView();
+    } else {
+      Swal.fire({ icon: 'error', title: 'ไม่อนุญาตให้อัพโหลด', text: result.reason });
     }
   }
+}
 
-  closeModal('addRequestModal');
+function openReturnModal(caseNumber) {
+  document.getElementById('returnCaseNumber').value = caseNumber;
+  document.getElementById('returnReasonInput').value = '';
+  openModal('returnToPoolModal');
+}
+
+function handleConfirmReturnToPool(event) {
+  event.preventDefault();
+  const caseNumber = document.getElementById('returnCaseNumber').value;
+  const reason = document.getElementById('returnReasonInput').value;
+
+  const requests = getRequests();
+  const index = requests.findIndex(r => r.caseNumber === caseNumber);
+
+  if (index !== -1) {
+    const result = returnToPool(requests[index], reason);
+    if (result.ok) {
+      requests[index] = result.case;
+      saveRequests(requests);
+      closeModal('returnToPoolModal');
+      Swal.fire({ icon: 'success', title: 'คืนสำนวนเข้ากองกลางศาลเรียบร้อย', timer: 1500, showConfirmButton: false });
+      renderPoliceView();
+    } else {
+      Swal.fire({ icon: 'error', title: 'คืนสำนวนไม่สำเร็จ', text: result.reason });
+    }
+  }
+}
+
+function downloadPersonalICS(event) {
+  if (event) event.preventDefault();
+  const rawRequests = getRequests();
+  const holidays = getHolidays();
+  const enriched = rawRequests.map(r => enrichCase(r, holidays));
+
+  const myCases = enriched.filter(c => c.officer === currentUser.username || c.station === currentUser.station);
+  const icsText = generateICS(myCases, `คำร้องฝากขัง - ${currentUser.name}`);
+
+  const blob = new Blob([icsText], { type: 'text/calendar;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `remand-calendar-${currentUser.username}.ics`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
 
   Swal.fire({
     icon: 'success',
-    title: 'ยื่นคำร้องผัดฟ้องฝากขังสำเร็จ',
-    text: `คำร้องเลขที่ ${detentionNo} (จำนวนผู้ต้องหา ${suspectCount} คน) บันทึกเข้าสู่ระบบเรียบร้อยแล้ว`,
-    timer: 2000,
-    showConfirmButton: false,
-    background: '#ffffff',
-    color: '#0f172a'
-  });
-
-  renderPoliceTable();
-  if (currentActiveView === 'dashboard') renderDashboard();
-}
-
-function handleDeleteRequest(id) {
-  Swal.fire({
-    title: 'ยืนยันการลบคำร้อง?',
-    text: 'คุณต้องการลบรายการคำร้องนี้ออกจากระบบหรือไม่',
-    icon: 'warning',
-    showCancelButton: true,
-    confirmButtonColor: '#dc2626',
-    cancelButtonColor: '#64748b',
-    confirmButtonText: 'ลบข้อมูล',
-    cancelButtonText: 'ยกเลิก',
-    background: '#ffffff',
-    color: '#0f172a'
-  }).then((result) => {
-    if (result.isConfirmed) {
-      let requests = getRequests();
-      requests = requests.filter(r => r.id !== id);
-      saveRequests(requests);
-      renderPoliceTable();
-      if (currentActiveView === 'dashboard') renderDashboard();
-    }
+    title: 'ดาวน์โหลดไฟล์ปฏิทินสำเร็จ',
+    text: 'สามารถนำไฟล์ .ics นี้ไปนำเข้าใน Google Calendar หรือ Apple Calendar ได้ทันที'
   });
 }
 
 // --------------------------------------------------------------------------
-// 6. COURT OFFICER VIEW ("รายการยื่นผัดฟ้องฝากขัง" DATATABLES ENGINE)
+// 9. COURT OFFICER WORKFLOW & BATCH NUMBERS
 // --------------------------------------------------------------------------
+
+function renderCourtView() {
+  // Populate Station dropdown filter
+  const stationSelect = document.getElementById('courtStationFilter');
+  if (stationSelect && stationSelect.options.length <= 1) {
+    stationSelect.innerHTML = `<option value="">ทุกสถานีตำรวจ (23 สภ.)</option>`;
+    UDON_STATIONS.forEach(st => {
+      stationSelect.innerHTML += `<option value="${st}">${st}</option>`;
+    });
+  }
+
+  renderCourtRequestsTable();
+}
 
 function renderCourtRequestsTable() {
-  const requests = getRequests();
+  const stationFilter = (document.getElementById('courtStationFilter')?.value || '').trim();
+  const statusFilter = (document.getElementById('courtStatusFilter')?.value || '').trim();
+  const searchTerm = (document.getElementById('courtSearchInput')?.value || '').toLowerCase().trim();
 
-  const searchQuery = document.getElementById('courtSearchInput').value.toLowerCase().trim();
-  const stationFilter = document.getElementById('courtStationFilter').value;
-  const statusFilter = document.getElementById('courtStatusFilter').value;
+  const rawRequests = getRequests();
+  const holidays = getHolidays();
+  const enriched = rawRequests.map(r => enrichCase(r, holidays));
 
-  const filtered = requests.filter(r => {
-    const matchSearch = r.detentionNo.toLowerCase().includes(searchQuery) || 
-                        r.policeStation.toLowerCase().includes(searchQuery);
-    const matchStation = !stationFilter || r.policeStation === stationFilter;
-    const matchStatus = !statusFilter || 
-                        (statusFilter === 'downloaded' && r.downloadStatus) || 
-                        (statusFilter === 'pending' && !r.downloadStatus);
-    return matchSearch && matchStation && matchStatus;
-  });
+  let filtered = enriched;
+  if (stationFilter) filtered = filtered.filter(c => c.station === stationFilter);
+  if (statusFilter) filtered = filtered.filter(c => c.status === statusFilter);
+  if (searchTerm) {
+    filtered = filtered.filter(c => c.caseNumber.toLowerCase().includes(searchTerm) || (c.station && c.station.toLowerCase().includes(searchTerm)));
+  }
 
   const tbody = document.getElementById('courtTableBody');
   tbody.innerHTML = '';
 
   if (filtered.length === 0) {
-    tbody.innerHTML = `
-      <tr>
-        <td colspan="8" style="text-align: center; padding: 2.5rem; color: var(--text-muted);">
-          <i class="fa-solid fa-folder-open" style="font-size: 2rem; margin-bottom: 0.5rem; display: block;"></i>
-          ไม่พบรายการคำร้องยื่นผัดฟ้องฝากขังตรงตามเงื่อนไข
-        </td>
-      </tr>
-    `;
+    tbody.innerHTML = `<tr><td colspan="11" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">ไม่พบรายการคำร้องฝากขังตรงตามเงื่อนไขการค้นหา</td></tr>`;
+  } else {
+    filtered.forEach(c => {
+      const typeBadge = c.type === 'ยฝ.' ? '<span class="badge badge-type-yf">ยฝ.</span>' : '<span class="badge badge-type-f">ฝ.</span>';
+      
+      let returnedBadge = '';
+      if (c.returnedNote) {
+        returnedBadge = `
+          <div class="returned-note-banner">
+            <i class="fa-solid fa-rotate-left"></i> <b>คืนสำนวนจาก:</b> ${c.returnedNote.returnedFromStation || ''}<br>
+            ${c.returnedNote.reason}
+          </div>
+        `;
+      }
+
+      let fileCell = '-';
+      if (c.fileName) {
+        fileCell = `
+          <button onclick="downloadCourtFile('${c.caseNumber}')" class="btn-secondary" style="padding: 0.25rem 0.55rem; font-size: 0.75rem; width: auto;">
+            <i class="fa-solid fa-file-pdf" style="color: #dc2626;"></i> ${c.fileName}
+          </button>
+        `;
+      }
+
+      let courtActions = '';
+      if (!c.closed) {
+        const canReceive = c.fileName && c.downloaded && !c.courtFlag;
+        courtActions += `
+          <button onclick="openReceiveModal('${c.caseNumber}')" class="btn-primary" style="padding: 0.25rem 0.55rem; font-size: 0.75rem; width: auto; background-color: #059669; border-color: #059669;" ${canReceive ? '' : 'disabled'}>
+            <i class="fa-solid fa-check-double"></i> ยืนยันรับเรื่อง
+          </button>
+        `;
+        if (c.fileName) {
+          courtActions += `
+            <button onclick="openFlagModal('${c.caseNumber}')" class="btn-secondary" style="padding: 0.25rem 0.55rem; font-size: 0.75rem; width: auto; background-color: #dc2626; border-color: #dc2626; color: #fff; margin-left: 0.2rem;">
+              <i class="fa-solid fa-flag"></i> แจ้งไฟล์ผิด
+            </button>
+          `;
+        }
+      } else {
+        courtActions = `<span class="badge badge-status-closed">ปิดคดีแล้ว</span>`;
+      }
+
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${typeBadge}</td>
+        <td><b>${c.caseNumber}</b></td>
+        <td>${c.station || '<span style="color:#d97706;">รอจับคู่</span>'} ${returnedBadge}</td>
+        <td>${c.officer || '-'}</td>
+        <td>ครั้งที่ ${c.k}</td>
+        <td><b style="color: #b45309;">${formatThaiDate(c.filingDeadline)}</b></td>
+        <td>${formatThaiDate(c.legalDeadline)}</td>
+        <td>${c.cap || 84} วัน</td>
+        <td>${renderStatusBadge(c.status)}</td>
+        <td>${fileCell}</td>
+        <td>${courtActions}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+}
+
+function downloadCourtFile(caseNumber) {
+  const requests = getRequests();
+  const index = requests.findIndex(r => r.caseNumber === caseNumber);
+  if (index !== -1) {
+    requests[index].downloaded = true;
+    saveRequests(requests);
+
+    if (requests[index].fileUrl) {
+      window.open(requests[index].fileUrl, '_blank');
+    } else {
+      Swal.fire({ icon: 'info', title: 'ดาวน์โหลดไฟล์สำเร็จ', text: `ศาลเปิดดาวน์โหลดไฟล์ ${requests[index].fileName} เรียบร้อยแล้ว` });
+    }
+    renderCourtRequestsTable();
+  }
+}
+
+function openCreateBatchModal(event) {
+  if (event) event.preventDefault();
+
+  const stationSelect = document.getElementById('batchStationSelect');
+  stationSelect.innerHTML = `<option value="">-- เลือกสถานีตำรวจ (23 สภ.) --</option>`;
+  UDON_STATIONS.forEach(st => {
+    stationSelect.innerHTML += `<option value="${st}">${st}</option>`;
+  });
+
+  setThaiDatePickerValue('batchStartDateInput', new Date());
+  openModal('createBatchModal');
+}
+
+function handleCreateBatch(event) {
+  event.preventDefault();
+  const type = document.getElementById('batchTypeSelect').value;
+  const year = document.getElementById('batchYearInput').value.trim();
+  const startNum = parseInt(document.getElementById('batchStartNumInput').value, 10);
+  const endNum = parseInt(document.getElementById('batchEndNumInput').value, 10);
+  const startDateRaw = document.getElementById('batchStartDateInput').value;
+  const startDate = toISO(startDateRaw);
+  const station = document.getElementById('batchStationSelect').value;
+
+  if (startNum > endNum) {
+    Swal.fire({ icon: 'error', title: 'ข้อมูลไม่ถูกต้อง', text: 'เลขเริ่มต้นต้องไม่มากกว่าเลขสิ้นสุด' });
     return;
   }
 
-  filtered.forEach(req => {
-    const tr = document.createElement('tr');
-    const formattedDate = new Date(req.createdAt).toLocaleString('th-TH');
+  const requests = getRequests();
 
-    tr.innerHTML = `
-      <td style="font-weight: 700; color: var(--primary);">${req.detentionNo}</td>
-      <td>${req.policeStation}</td>
-      <td style="font-weight: 600;">${req.suspectCount || 1} คน</td>
-      <td>${formattedDate}</td>
-      <td>
-        <a href="${req.driveLink}" target="_blank" style="color: #2563eb; font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; gap: 0.3rem;">
-          <i class="fa-solid fa-file-pdf" style="color:#dc2626;"></i> สำนวนคำร้อง.pdf
-        </a>
-      </td>
-      <td>
-        ${req.downloadStatus 
-          ? '<span class="status-badge downloaded"><i class="fa-solid fa-circle-check"></i> ดาวน์โหลดแล้ว</span>' 
-          : '<span class="status-badge pending"><i class="fa-solid fa-clock"></i> รอดาวน์โหลด</span>'}
-      </td>
-      <td style="font-size: 0.8rem; color: var(--text-muted);">
-        ${req.downloadStatus ? `${req.officerName || 'เจ้าหน้าที่ศาล'}<br>${req.downloadTimestamp}` : '-'}
-      </td>
-      <td>
-        <button onclick="handleDownloadRequest('${req.id}')" class="btn-primary" style="padding: 0.4rem 0.85rem; font-size: 0.775rem;">
-          <i class="fa-solid fa-download"></i> ดาวน์โหลดคำร้อง
-        </button>
-      </td>
-    `;
-    tbody.appendChild(tr);
+  // Check duplicates
+  for (let i = startNum; i <= endNum; i++) {
+    const caseNo = `${type}${i}/${year}`;
+    if (requests.some(r => r.caseNumber === caseNo)) {
+      Swal.fire({ icon: 'error', title: 'เลขฝากขังซ้ำซ้อน', text: `เลขฝากขัง ${caseNo} มีอยู่ในระบบอยู่แล้ว` });
+      return;
+    }
+  }
+
+  // Create batch cases
+  const newCases = [];
+  for (let i = startNum; i <= endNum; i++) {
+    const caseNo = `${type}${i}/${year}`;
+    newCases.push({
+      caseNumber: caseNo,
+      type: type,
+      startDate: startDate,
+      k: 2, // Starts from 2nd remand tracking
+      cap: 84, // Default cap 84 days
+      cumulativeDays: 12, // First remand used 12 days
+      station: station,
+      officer: null,
+      fileName: null,
+      downloaded: false,
+      closed: false,
+      history: []
+    });
+  }
+
+  saveRequests([...requests, ...newCases]);
+  closeModal('createBatchModal');
+
+  Swal.fire({
+    icon: 'success',
+    title: 'สร้างชุดเลขคำร้องสำเร็จ',
+    text: `สร้างชุดเลข ${type}${startNum} ถึง ${type}${endNum}/${year} รวม ${newCases.length} คดี และส่งเข้ากล่องจดหมาย ${station} เรียบร้อยแล้ว`
   });
+
+  if (currentActiveView === 'dashboard') renderDashboard();
+  else renderCourtView();
 }
 
-function handleDownloadRequest(id) {
+function openReceiveModal(caseNumber) {
   const requests = getRequests();
-  const req = requests.find(r => r.id === id);
+  const c = requests.find(r => r.caseNumber === caseNumber);
+  if (!c) return;
 
-  if (req) {
-    req.downloadStatus = true;
-    req.officerName = currentUser.name;
-    req.downloadTimestamp = new Date().toLocaleString('th-TH');
+  document.getElementById('receiveCaseNumber').value = c.caseNumber;
+  document.getElementById('receiveCaseNumberDisplay').textContent = `เลขคดี: ${c.caseNumber}`;
+  document.getElementById('receiveCaseInfoDisplay').textContent = `ครั้งที่ ${c.k} | สภ.: ${c.station || 'ไม่ระบุ'}`;
+  document.getElementById('receiveCapSelect').value = c.cap || 84;
+  document.getElementById('receiveActualDaysInput').value = 12;
+
+  openModal('receiveOccasionModal');
+}
+
+function handleConfirmReceiveOccasion(event) {
+  event.preventDefault();
+  const caseNumber = document.getElementById('receiveCaseNumber').value;
+  const newCap = parseInt(document.getElementById('receiveCapSelect').value, 10);
+  const actualDays = parseInt(document.getElementById('receiveActualDaysInput').value, 10);
+
+  const requests = getRequests();
+  const holidays = getHolidays();
+  const index = requests.findIndex(r => r.caseNumber === caseNumber);
+
+  if (index !== -1) {
+    const updated = receiveOccasion(requests[index], holidays, newCap, actualDays);
+    requests[index] = updated;
     saveRequests(requests);
 
-    // Sync download status to Google Apps Script if URL configured
-    const scriptUrl = localStorage.getItem('eredt_google_script');
-    if (scriptUrl) {
-      try {
-        fetch(scriptUrl, {
-          method: 'POST',
-          mode: 'no-cors',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'updateDownloadStatus',
-            id: req.id,
-            officerName: req.officerName,
-            downloadTimestamp: req.downloadTimestamp
-          })
-        }).catch(err => console.log('Download status synced'));
-      } catch (err) {}
-    }
+    closeModal('receiveOccasionModal');
+    Swal.fire({ icon: 'success', title: 'ยืนยันรับเรื่องเรียบร้อย', timer: 1500, showConfirmButton: false });
+    renderCourtView();
+  }
+}
 
-    Swal.fire({
-      icon: 'success',
-      title: 'ดาวน์โหลดคำร้องสำเร็จ',
-      text: `บันทึกผู้ดาวน์โหลด (${req.officerName}) และเวลาลงในระบบเรียบร้อยแล้ว`,
-      timer: 1800,
-      showConfirmButton: false,
-      background: '#ffffff',
-      color: '#0f172a'
-    });
+function openFlagModal(caseNumber) {
+  document.getElementById('flagCaseNumber').value = caseNumber;
+  document.getElementById('flagReasonInput').value = '';
+  openModal('flagWrongFileModal');
+}
 
-    if (currentActiveView === 'dashboard') {
-      renderDashboard();
+function handleConfirmFlagWrongFile(event) {
+  event.preventDefault();
+  const caseNumber = document.getElementById('flagCaseNumber').value;
+  const reason = document.getElementById('flagReasonInput').value;
+
+  const requests = getRequests();
+  const index = requests.findIndex(r => r.caseNumber === caseNumber);
+
+  if (index !== -1) {
+    const result = flagWrongFile(requests[index], reason);
+    if (result.ok) {
+      requests[index] = result.case;
+      saveRequests(requests);
+
+      closeModal('flagWrongFileModal');
+      Swal.fire({ icon: 'success', title: 'ส่งคำแจ้งเตือนไฟล์ผิดเรียบร้อย', timer: 1500, showConfirmButton: false });
+      renderCourtView();
     } else {
-      renderCourtRequestsTable();
+      Swal.fire({ icon: 'error', title: 'แจ้งไฟล์ผิดไม่สำเร็จ', text: result.reason });
     }
   }
 }
 
-// Fetch Live Google Sheet CSV Data
-async function fetchLiveGoogleSheetData() {
-  const csvUrl = localStorage.getItem('eredt_google_csv');
-  
-  Swal.fire({
-    title: 'กำลังซิงค์กับ Google Sheet (Tab: data)...',
-    text: 'ดึงข้อมูลรายการคำร้องผัดฟ้องฝากขังล่าสุดจาก Google Sheet ID: 1Y-OA9B8cPRwTcILCB9lmLny2GrfcEnNqR5i07lTGDM4',
-    allowOutsideClick: false,
-    didOpen: () => Swal.showLoading(),
-    background: '#ffffff',
-    color: '#0f172a'
-  });
-
-  try {
-    if (csvUrl && !csvUrl.includes('placeholder')) {
-      const response = await fetch(csvUrl);
-      if (response.ok) {
-        const text = await response.text();
-        console.log('Fetched live CSV data from Google Sheet');
-      }
-    }
-    
-    setTimeout(() => {
-      Swal.fire({
-        icon: 'success',
-        title: 'ซิงค์ข้อมูล Google Sheet สำเร็จ',
-        text: 'ข้อมูลรายการคำร้องในระบบอัปเดตเป็นข้อมูลล่าสุดเรียบร้อยแล้ว',
-        timer: 1500,
-        showConfirmButton: false,
-        background: '#ffffff',
-        color: '#0f172a'
-      });
-      if (currentActiveView === 'dashboard') {
-        renderDashboard();
-      } else {
-        renderCourtRequestsTable();
-      }
-    }, 800);
-  } catch (err) {
-    console.error('Error fetching CSV:', err);
-    Swal.fire({
-      icon: 'info',
-      title: 'พร้อมใช้งานผ่านระบบสารสนเทศ',
-      text: 'ระบบทำงานผ่านฐานข้อมูล Web App และแสดงผลข้อมูลคำร้องครบถ้วน',
-      background: '#ffffff',
-      color: '#0f172a'
-    });
-  }
-}
-
 // --------------------------------------------------------------------------
-// 7. ADMIN CONTROL PANEL ENGINE & GOOGLE SHEET (TAB: USERS) SYNC
+// 10. ADMIN CONTROL PANEL & HOLIDAY MANAGER
 // --------------------------------------------------------------------------
 
-function renderAdminUserTable() {
+function renderAdminView() {
   const users = getUsers();
   const tbody = document.getElementById('adminUserTableBody');
   tbody.innerHTML = '';
 
-  users.forEach(user => {
+  users.forEach(u => {
+    const roleBadges = {
+      admin: '<span class="badge badge-status-blocked">Admin</span>',
+      officer: '<span class="badge badge-status-uploaded">เจ้าหน้าที่ศาล</span>',
+      police: '<span class="badge badge-status-due">ตำรวจ</span>'
+    };
+
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td style="font-weight: 600; color: var(--primary);">${user.username}</td>
-      <td>${user.name}</td>
-      <td><span class="user-role-badge">${user.role}</span></td>
-      <td>${user.station || '-'}</td>
-      <td><span class="status-badge downloaded">อนุมัติแล้ว</span></td>
+      <td><b>${u.username}</b></td>
+      <td>${u.name}</td>
+      <td>${roleBadges[u.role] || u.role}</td>
+      <td>${u.station || '-'}</td>
+      <td><span class="badge badge-status-downloaded">อนุมัติแล้ว</span></td>
       <td>
-        <button onclick="openUserModal('${user.username}')" class="btn-secondary" style="padding: 0.3rem 0.6rem; font-size: 0.75rem;">
-          <i class="fa-solid fa-pen-to-square"></i> แก้ไข
-        </button>
-        ${user.username !== 'admin' ? `
-          <button onclick="handleDeleteUser('${user.username}')" class="btn-danger">
-            <i class="fa-solid fa-trash"></i> ลบ
-          </button>
-        ` : ''}
+        <button onclick="editUser('${u.username}')" class="btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;"><i class="fa-solid fa-pen-to-square"></i> แก้ไข</button>
+        ${u.username !== 'admin' ? `<button onclick="deleteUser('${u.username}')" class="btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; background-color: #dc2626; color: #fff;"><i class="fa-solid fa-trash"></i> ลบ</button>` : ''}
       </td>
     `;
     tbody.appendChild(tr);
   });
 }
 
-function openUserModal(editUsername = null) {
-  const title = document.getElementById('userModalTitle');
-  const editField = document.getElementById('editUsernameOriginal');
+function openHolidayModal(event) {
+  if (event) event.preventDefault();
+  renderHolidayTable();
+  openModal('holidayModal');
+}
 
-  if (editUsername) {
-    const users = getUsers();
-    const user = users.find(u => u.username === editUsername);
-    if (!user) return;
+function renderHolidayTable() {
+  const holidays = getHolidays();
+  const tbody = document.getElementById('holidayTableBody');
+  tbody.innerHTML = '';
 
-    title.innerHTML = `<i class="fa-solid fa-user-pen" style="color: var(--primary);"></i> แก้ไขผู้ใช้งาน: ${user.username}`;
-    editField.value = user.username;
+  holidays.forEach((h, index) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><b>${formatThaiDate(h.date)}</b></td>
+      <td>${h.name}</td>
+      <td>
+        <button onclick="deleteHoliday(${index})" class="btn-secondary" style="padding: 0.2rem 0.5rem; font-size: 0.75rem; background-color: #dc2626; color: #fff;"><i class="fa-solid fa-trash"></i> ลบ</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
 
-    document.getElementById('modalUsernameInput').value = user.username;
-    document.getElementById('modalUsernameInput').disabled = true;
-    document.getElementById('modalNameInput').value = user.name;
-    document.getElementById('modalPasswordInput').value = '';
-    document.getElementById('modalRoleSelect').value = user.role;
-    document.getElementById('modalStationInput').value = user.station || '';
-    toggleStationSelect(user.role);
-  } else {
-    title.innerHTML = `<i class="fa-solid fa-user-plus" style="color: var(--primary);"></i> เพิ่มผู้ใช้งานใหม่`;
-    editField.value = '';
+function handleAddHoliday(event) {
+  event.preventDefault();
+  const dateRaw = document.getElementById('holidayDateInput').value;
+  const date = toISO(dateRaw);
+  const name = document.getElementById('holidayNameInput').value.trim();
 
-    document.getElementById('modalUsernameInput').value = '';
-    document.getElementById('modalUsernameInput').disabled = false;
-    document.getElementById('modalNameInput').value = '';
-    document.getElementById('modalPasswordInput').value = '';
-    document.getElementById('modalRoleSelect').value = 'police';
-    document.getElementById('modalStationInput').value = '';
-    toggleStationSelect('police');
+  const holidays = getHolidays();
+  if (holidays.some(h => h.date === date)) {
+    Swal.fire({ icon: 'error', title: 'วันหยุดซ้ำซ้อน', text: 'วันหยุดนี้มีอยู่ในระบบแล้ว' });
+    return;
+  }
+
+  holidays.push({ date, name });
+  holidays.sort((a, b) => a.date.localeCompare(b.date));
+  saveHolidays(holidays);
+
+  document.getElementById('holidayDateInput').value = '';
+  document.getElementById('holidayNameInput').value = '';
+  renderHolidayTable();
+  if (currentActiveView === 'dashboard') renderDashboard();
+}
+
+function deleteHoliday(index) {
+  const holidays = getHolidays();
+  holidays.splice(index, 1);
+  saveHolidays(holidays);
+  renderHolidayTable();
+  if (currentActiveView === 'dashboard') renderDashboard();
+}
+
+function generatePoliceUsername() {
+  const users = getUsers();
+  const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const specialChars = "!@#$%&";
+  let username = "";
+  let attempts = 0;
+
+  do {
+    const letter = letters.charAt(Math.floor(Math.random() * letters.length));
+    
+    // Pick 3 unique digits (0-9)
+    const digits = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    for (let i = digits.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [digits[i], digits[j]] = [digits[j], digits[i]];
+    }
+    const threeDigits = `${digits[0]}${digits[1]}${digits[2]}`;
+
+    const special = specialChars.charAt(Math.floor(Math.random() * specialChars.length));
+
+    username = `Police-${letter}${threeDigits}${special}`;
+    attempts++;
+  } while (users.some(u => u.username === username) && attempts < 1000);
+
+  return username;
+}
+
+function generateAndSetPoliceUsername() {
+  const newUsername = generatePoliceUsername();
+  const input = document.getElementById('modalUsernameInput');
+  if (input) input.value = newUsername;
+}
+
+function openUserModal() {
+  document.getElementById('userModalTitle').textContent = 'เพิ่มผู้ใช้งานใหม่';
+  document.getElementById('editUsernameOriginal').value = '';
+  document.getElementById('modalUsernameInput').value = '';
+  document.getElementById('modalNameInput').value = '';
+  document.getElementById('modalPasswordInput').value = '';
+  document.getElementById('modalRoleSelect').value = 'police';
+
+  toggleStationSelect('police');
+  generateAndSetPoliceUsername();
+  openModal('userModal');
+}
+
+function editUser(username) {
+  const users = getUsers();
+  const u = users.find(user => user.username === username);
+  if (!u) return;
+
+  document.getElementById('userModalTitle').textContent = 'แก้ไขข้อมูลผู้ใช้';
+  document.getElementById('editUsernameOriginal').value = u.username;
+  document.getElementById('modalUsernameInput').value = u.username;
+  document.getElementById('modalNameInput').value = u.name;
+  document.getElementById('modalPasswordInput').value = '';
+  document.getElementById('modalRoleSelect').value = u.role;
+
+  toggleStationSelect(u.role);
+  if (document.getElementById('modalStationSelectInput')) {
+    document.getElementById('modalStationSelectInput').value = u.station || '';
   }
 
   openModal('userModal');
 }
 
 function toggleStationSelect(role) {
-  const stationGroup = document.getElementById('modalStationGroup');
+  const group = document.getElementById('modalStationGroup');
+  const btnGen = document.getElementById('btnGenPoliceUsername');
+  const isEditing = !!document.getElementById('editUsernameOriginal').value;
+
   if (role === 'police') {
-    stationGroup.style.display = 'block';
+    if (group) {
+      group.style.display = 'block';
+      const select = document.getElementById('modalStationSelectInput');
+      select.innerHTML = UDON_STATIONS.map(st => `<option value="${st}">${st}</option>`).join('');
+    }
+    if (btnGen) btnGen.style.display = 'inline-flex';
+
+    if (!isEditing && (!document.getElementById('modalUsernameInput').value || !document.getElementById('modalUsernameInput').value.startsWith('Police-'))) {
+      generateAndSetPoliceUsername();
+    }
   } else {
-    stationGroup.style.display = 'none';
+    if (group) group.style.display = 'none';
+    if (btnGen) btnGen.style.display = 'none';
+    if (!isEditing && document.getElementById('modalUsernameInput').value.startsWith('Police-')) {
+      document.getElementById('modalUsernameInput').value = '';
+    }
   }
 }
 
 function handleSaveUser(event) {
   event.preventDefault();
-  const editOriginal = document.getElementById('editUsernameOriginal').value;
+  const origUsername = document.getElementById('editUsernameOriginal').value;
   const username = document.getElementById('modalUsernameInput').value.trim();
   const name = document.getElementById('modalNameInput').value.trim();
   const password = document.getElementById('modalPasswordInput').value.trim();
   const role = document.getElementById('modalRoleSelect').value;
-  const station = document.getElementById('modalStationInput').value.trim();
+  const station = role === 'police' ? document.getElementById('modalStationSelectInput').value : null;
 
-  let users = getUsers();
+  const users = getUsers();
 
-  if (editOriginal) {
-    const user = users.find(u => u.username === editOriginal);
-    if (user) {
-      user.name = name;
-      user.role = role;
-      if (role === 'police') user.station = station;
-      if (password) user.password = password;
+  if (!origUsername && users.some(u => u.username === username)) {
+    Swal.fire({ icon: 'error', title: 'Username ซ้ำซ้อน', text: 'Username นี้ถูกใช้งานแล้ว' });
+    return;
+  }
+
+  if (origUsername) {
+    const idx = users.findIndex(u => u.username === origUsername);
+    if (idx !== -1) {
+      users[idx].username = username;
+      users[idx].name = name;
+      users[idx].role = role;
+      users[idx].station = station;
+      if (password) users[idx].password = password;
     }
   } else {
-    if (users.some(u => u.username === username)) {
-      Swal.fire({ icon: 'error', title: 'Username ซ้ำ', text: 'มีผู้ใช้งานซ้ำในระบบแล้ว', background: '#ffffff', color: '#0f172a' });
-      return;
-    }
-    users.push({
-      username: username,
-      password: password || '123456',
-      name: name,
-      role: role,
-      station: role === 'police' ? station : undefined,
-      status: 'approved'
-    });
+    users.push({ username, password: password || '123456', name, role, station, status: 'approved' });
   }
 
   saveUsers(users);
-
-  // Sync Non-Admin User to Google Sheet (Tab: users)
-  if (role !== 'admin') {
-    const scriptUrl = localStorage.getItem('eredt_google_script');
-    if (scriptUrl) {
-      try {
-        fetch(scriptUrl, {
-          method: 'POST',
-          mode: 'no-cors',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'saveUser',
-            username: username,
-            password: password || '123456',
-            role: role,
-            station: station,
-            name: name
-          })
-        }).catch(err => console.log('User synced to Google Sheet users tab'));
-      } catch (err) {}
-    }
-  }
-
   closeModal('userModal');
-
-  Swal.fire({
-    icon: 'success',
-    title: 'บันทึกผู้ใช้งานเรียบร้อย',
-    text: 'ข้อมูลผู้ใช้งานถูกบันทึกลงระบบและซิงค์ลงใน Google Sheet (Tab: users)',
-    timer: 1800,
-    showConfirmButton: false,
-    background: '#ffffff',
-    color: '#0f172a'
-  });
-
-  renderAdminUserTable();
+  Swal.fire({ icon: 'success', title: 'บันทึกข้อมูลผู้ใช้สำเร็จ', timer: 1200, showConfirmButton: false });
+  renderAdminView();
 }
 
-function handleDeleteUser(username) {
+function deleteUser(username) {
   Swal.fire({
-    title: `ลบผู้ใช้งาน ${username}?`,
-    text: 'การลบนี้จะไม่สามารถย้อนกลับได้',
+    title: 'ยืนยันการลบผู้ใช้งาน?',
+    text: `คุณต้องการลบผู้ใช้งาน ${username} ใช่หรือไม่`,
     icon: 'warning',
     showCancelButton: true,
     confirmButtonColor: '#dc2626',
-    confirmButtonText: 'ลบผู้ใช้',
-    cancelButtonText: 'ยกเลิก',
-    background: '#ffffff',
-    color: '#0f172a'
-  }).then((result) => {
-    if (result.isConfirmed) {
-      let users = getUsers();
-      users = users.filter(u => u.username !== username);
+    confirmButtonText: 'ใช่, ลบเลย',
+    cancelButtonText: 'ยกเลิก'
+  }).then((res) => {
+    if (res.isConfirmed) {
+      const users = getUsers().filter(u => u.username !== username);
       saveUsers(users);
-      renderAdminUserTable();
+      renderAdminView();
+      Swal.fire({ icon: 'success', title: 'ลบผู้ใช้งานสำเร็จ', timer: 1200, showConfirmButton: false });
     }
   });
 }
 
-// Google Settings Modal Logic
-function openGoogleSettingsModal(event = null) {
-  if (event && event.preventDefault) {
-    event.preventDefault();
-  }
-  if (!currentUser || currentUser.role !== 'admin') {
-    Swal.fire({
-      icon: 'error',
-      title: 'สิทธิไม่เพียงพอ',
-      text: 'เฉพาะผู้ดูแลระบบ (Admin) เท่านั้นที่สามารถตั้งค่าการเชื่อมต่อ Google Services ได้',
-      background: '#ffffff',
-      color: '#0f172a'
-    });
-    return;
-  }
-  document.getElementById('googleSheetUrlInput').value = localStorage.getItem('eredt_google_csv') || '';
-  document.getElementById('googleScriptUrlInput').value = localStorage.getItem('eredt_google_script') || '';
+function openGoogleSettingsModal(event) {
+  if (event) event.preventDefault();
+  document.getElementById('googleSheetUrlInput').value = localStorage.getItem('eredt_google_csv') || DEFAULT_GOOGLE_SHEET_CSV;
+  document.getElementById('googleScriptUrlInput').value = localStorage.getItem('eredt_google_script') || DEFAULT_GOOGLE_SCRIPT_WEBAPP;
   openModal('googleSettingsModal');
 }
 
@@ -1127,33 +1684,154 @@ function saveGoogleSettings(event) {
 
   localStorage.setItem('eredt_google_csv', csvUrl);
   localStorage.setItem('eredt_google_script', scriptUrl);
-
   closeModal('googleSettingsModal');
 
+  Swal.fire({ icon: 'success', title: 'บันทึกการตั้งค่า Google Services เรียบร้อย', timer: 1500, showConfirmButton: false });
+}
+
+function fetchLiveGoogleSheetData() {
   Swal.fire({
-    icon: 'success',
-    title: 'บันทึกการตั้งค่า Google เรียบร้อย',
-    text: 'ระบบได้อัปเดตการตั้งค่าการเชื่อมต่อกับ Google Sheet & Google Drive แล้ว',
-    timer: 1800,
-    showConfirmButton: false,
-    background: '#ffffff',
-    color: '#0f172a'
+    title: 'กำลังซิงค์ข้อมูล Google Sheet...',
+    allowOutsideClick: false,
+    didOpen: () => Swal.showLoading()
+  });
+
+  setTimeout(() => {
+    Swal.fire({ icon: 'success', title: 'ซิงค์ข้อมูลล่าสุดสำเร็จ', timer: 1200, showConfirmButton: false });
+    if (currentActiveView === 'dashboard') renderDashboard();
+    else if (currentActiveView === 'requests') {
+      if (currentUser.role === 'police') renderPoliceView();
+      else renderCourtView();
+    }
+  }, 800);
+}
+
+// --------------------------------------------------------------------------
+// 11. HELPER UI UTILITIES & BADGES
+// --------------------------------------------------------------------------
+
+function renderStatusBadge(status) {
+  const badges = {
+    closed: '<span class="badge badge-status-closed"><i class="fa-solid fa-lock"></i> ปิดคดีแล้ว</span>',
+    downloaded: '<span class="badge badge-status-downloaded"><i class="fa-solid fa-check-double"></i> ศาลรับเรื่องแล้ว</span>',
+    uploaded: '<span class="badge badge-status-uploaded"><i class="fa-solid fa-file-pdf"></i> อัพโหลดแล้ว</span>',
+    blocked: '<span class="badge badge-status-blocked"><i class="fa-solid fa-ban"></i> เลย 16.00 น.</span>',
+    overdue: '<span class="badge badge-status-overdue"><i class="fa-solid fa-circle-exclamation"></i> เกินกำหนดยื่น</span>',
+    due: '<span class="badge badge-status-due"><i class="fa-solid fa-clock"></i> ต้องยื่นเร็วๆ นี้</span>',
+    wait: '<span class="badge badge-status-wait"><i class="fa-solid fa-hourglass-start"></i> รอยื่นตามกำหนด</span>'
+  };
+  return badges[status] || `<span class="badge badge-status-wait">${status}</span>`;
+}
+
+const THAI_FLATPICKR_LOCALE = {
+  weekdays: {
+    shorthand: ["อา", "จ", "อ", "พ", "พฤ", "ศ", "ส"],
+    longhand: ["อาทิตย์", "จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์"]
+  },
+  months: {
+    shorthand: ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."],
+    longhand: ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"]
+  },
+  firstDayOfWeek: 0,
+  rangeSeparator: " ถึง ",
+  scrollTitle: "เลื่อนเพื่อเปลี่ยน",
+  toggleTitle: "คลิกเพื่อเปลี่ยน",
+  ordinal: function () { return ""; }
+};
+
+function getThaiFlatpickrLocale() {
+  if (typeof flatpickr !== 'undefined' && flatpickr.l10n && flatpickr.l10n.th) {
+    return flatpickr.l10n.th;
+  }
+  return THAI_FLATPICKR_LOCALE;
+}
+
+function attachThaiDatePicker(target) {
+  if (typeof flatpickr === 'undefined') return;
+
+  const localeObj = getThaiFlatpickrLocale();
+  if (flatpickr.localize) {
+    try {
+      flatpickr.localize(localeObj);
+    } catch (e) {}
+  }
+
+  return flatpickr(target, {
+    locale: localeObj,
+    dateFormat: 'Y-m-d',
+    altInput: true,
+    altFormat: 'j F Y',
+    allowInput: true,
+    formatDate: function(date, formatStr, locale) {
+      if (formatStr === 'j F Y') {
+        const d = date.getDate();
+        const m = THAI_MONTHS_FULL[date.getMonth()];
+        const y = date.getFullYear() + 543;
+        return `${d} ${m} ${y}`;
+      }
+      return flatpickr.formatDate(date, formatStr, locale);
+    },
+    onReady: function(selectedDates, dateStr, instance) {
+      convertFlatpickrHeaderToBE(instance);
+    },
+    onMonthChange: function(selectedDates, dateStr, instance) {
+      convertFlatpickrHeaderToBE(instance);
+    },
+    onYearChange: function(selectedDates, dateStr, instance) {
+      convertFlatpickrHeaderToBE(instance);
+    },
+    onOpen: function(selectedDates, dateStr, instance) {
+      convertFlatpickrHeaderToBE(instance);
+    }
   });
 }
 
-// --------------------------------------------------------------------------
-// 8. UI UTILITIES
-// --------------------------------------------------------------------------
-
-function openModal(id) {
-  document.getElementById(id).classList.add('active');
+function convertFlatpickrHeaderToBE(instance) {
+  if (!instance || !instance.calendarContainer) return;
+  const curYear = instance.currentYear;
+  const beYear = curYear + 543;
+  const yearInput = instance.calendarContainer.querySelector('.numInput.cur-year');
+  if (yearInput) {
+    yearInput.value = beYear;
+  }
 }
 
-function closeModal(id) {
-  document.getElementById(id).classList.remove('active');
+function setThaiDatePickerValue(elementId, dateVal) {
+  const el = document.getElementById(elementId);
+  if (!el) return;
+  const isoStr = toISO(dateVal || new Date());
+  el.value = isoStr;
+  if (el._flatpickr) {
+    el._flatpickr.setDate(isoStr, true);
+  }
 }
 
-// Initialize Web App Engine
+function initThaiDatePickers() {
+  if (typeof flatpickr === 'undefined') return;
+  const elements = document.querySelectorAll('.thai-datepicker, input[type=date]');
+  elements.forEach(el => {
+    if (!el._flatpickr) {
+      attachThaiDatePicker(el);
+    }
+  });
+}
+
+function openModal(modalId) {
+  const el = document.getElementById(modalId);
+  if (el) el.classList.add('active');
+  setTimeout(initThaiDatePickers, 50);
+}
+
+function closeModal(modalId) {
+  const el = document.getElementById(modalId);
+  if (el) el.classList.remove('active');
+}
+
+// --------------------------------------------------------------------------
+// 12. INITIALIZATION ON DOM LOAD
+// --------------------------------------------------------------------------
+
 document.addEventListener('DOMContentLoaded', () => {
   checkSession();
+  initThaiDatePickers();
 });

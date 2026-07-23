@@ -288,12 +288,11 @@ body {
   color: #ffffff !important;
 }
 
-/* Main Content Area */
+/* Main Content Area (Full Screen Width Layout) */
 .main-content {
   flex: 1;
-  padding: 2rem;
-  max-width: 1400px;
-  margin: 0 auto;
+  padding: 1.5rem 2rem;
+  max-width: 100%;
   width: 100%;
   background-color: #ffffff !important;
 }
@@ -642,7 +641,7 @@ table.data-table tr:hover td {
   border: 1px solid #b45309;
 }
 
-/* Calendar View */
+/* Calendar View Engine (Modern Cards & Numeric Badges) */
 .calendar-wrapper {
   padding: 1.5rem;
 }
@@ -652,25 +651,43 @@ table.data-table tr:hover td {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 1.25rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--card-border);
+}
+
+.calendar-title-group {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.calendar-title-group h3 {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--text-main);
+  letter-spacing: -0.01em;
 }
 
 .calendar-nav-btn {
-  background: #1e3a8a;
-  border: 1px solid #1d4ed8;
+  background: var(--primary);
+  border: 1px solid var(--primary-hover);
   color: #ffffff !important;
-  width: 38px;
-  height: 38px;
-  border-radius: 8px;
+  width: 40px;
+  height: 40px;
+  border-radius: 0.6rem;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.2s;
+  font-size: 1rem;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.1);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .calendar-nav-btn:hover {
-  background: #1d4ed8;
-  color: #ffffff !important;
+  background: var(--primary-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.15);
 }
 
 .calendar-nav-btn i {
@@ -680,46 +697,86 @@ table.data-table tr:hover td {
 .calendar-grid {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
-  gap: 0.5rem;
+  gap: 0.65rem;
 }
 
 .calendar-day-header {
   text-align: center;
-  padding: 0.5rem;
-  font-size: 0.8rem;
+  padding: 0.6rem 0.25rem;
+  font-size: 0.85rem;
   font-weight: 700;
   color: var(--primary);
+  background: #f8fafc;
+  border-radius: 0.5rem;
+  text-transform: uppercase;
 }
 
+.calendar-day-header.weekend-hdr {
+  color: #ef4444;
+}
+
+/* Individual Calendar Day Cards */
 .calendar-day-cell {
   min-height: 105px;
-  padding: 0.6rem;
+  padding: 0.65rem;
   background: #ffffff;
-  border: 1px solid var(--card-border);
-  border-radius: 0.6rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.85rem;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   display: flex;
   flex-direction: column;
   justify-content: space-between;
+  position: relative;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.02);
 }
 
 .calendar-day-cell:hover {
-  background: #f0f9ff;
+  background: #ffffff;
   border-color: var(--primary);
-  transform: scale(1.02);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+  transform: translateY(-2px);
+  z-index: 2;
 }
 
-.calendar-day-cell.other-month {
-  opacity: 0.35;
-  background: #f8fafc;
+.calendar-day-cell.blank {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
   pointer-events: none;
+  opacity: 0.25;
+}
+
+.calendar-day-cell.weekend {
+  background: #f8fafc;
+}
+
+.calendar-day-cell.holiday {
+  background: #fff5f5;
+  border-color: #fca5a5;
+}
+
+.calendar-day-cell.today {
+  background: #eff6ff;
+  border: 2px solid var(--primary);
+  box-shadow: 0 4px 14px rgba(30, 58, 138, 0.15);
+}
+
+.day-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.35rem;
 }
 
 .calendar-day-number {
   font-weight: 700;
-  font-size: 0.9rem;
+  font-size: 0.95rem;
   color: var(--text-main);
+}
+
+.calendar-day-cell.weekend .calendar-day-number {
+  color: #64748b;
 }
 
 .calendar-day-cell.today .calendar-day-number {
@@ -727,16 +784,102 @@ table.data-table tr:hover td {
   font-size: 1.1rem;
 }
 
-.calendar-day-count {
-  margin-top: 0.4rem;
-  padding: 0.2rem 0.5rem;
+.today-tag {
+  font-size: 0.65rem;
   background: var(--primary);
-  color: #ffffff !important;
+  color: #ffffff;
+  padding: 0.1rem 0.4rem;
   border-radius: 999px;
-  font-size: 0.7rem;
-  font-weight: 700;
-  text-align: center;
+  font-weight: 600;
 }
+
+.holiday-tag {
+  font-size: 0.65rem;
+  background: #fee2e2;
+  color: #991b1b;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+/* Numeric Count Badges Inside Days */
+.calendar-badges-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.35rem;
+}
+
+.calendar-count-badge {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.5rem;
+  font-size: 0.725rem;
+  font-weight: 600;
+  line-height: 1;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+.calendar-count-badge.badge-filing {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fcd34d;
+}
+
+.calendar-count-badge.badge-legal {
+  background: #dbeafe;
+  color: #1e40af;
+  border: 1px solid #93c5fd;
+}
+
+.calendar-count-badge.badge-closed {
+  background: #e2e8f0;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+}
+
+.count-number-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #ffffff;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.calendar-legend-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1.5rem;
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--card-border);
+  flex-wrap: wrap;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 500;
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+}
+
 
 /* Modals */
 .modal-overlay {
@@ -852,3 +995,159 @@ table.data-table tr:hover td {
     display: none;
   }
 }
+
+/* Status Badges for Remand Case Engine */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.65rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.badge-status-overdue {
+  background-color: #fee2e2;
+  color: #991b1b;
+  border: 1px solid #fca5a5;
+}
+
+.badge-status-due {
+  background-color: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fcd34d;
+}
+
+.badge-status-blocked {
+  background-color: #f3e8ff;
+  color: #6b21a8;
+  border: 1px solid #d8b4fe;
+}
+
+.badge-status-uploaded {
+  background-color: #dbeafe;
+  color: #1e40af;
+  border: 1px solid #93c5fd;
+}
+
+.badge-status-downloaded {
+  background-color: #d1fae5;
+  color: #065f46;
+  border: 1px solid #6ee7b7;
+}
+
+.badge-status-wait {
+  background-color: #f1f5f9;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+}
+
+.badge-status-closed {
+  background-color: #e2e8f0;
+  color: #64748b;
+  border: 1px solid #cbd5e1;
+}
+
+.badge-type-yf {
+  background-color: #fef3c7;
+  color: #b45309;
+  border: 1px solid #fde047;
+  font-weight: 700;
+}
+
+.badge-type-f {
+  background-color: #e0f2fe;
+  color: #0369a1;
+  border: 1px solid #7dd3fc;
+  font-weight: 700;
+}
+
+/* Court Flag & Returned Note Banners */
+.court-flag-banner {
+  background: #fef2f2;
+  border: 1px solid #fca5a5;
+  color: #991b1b;
+  border-radius: 0.5rem;
+  padding: 0.6rem 0.85rem;
+  font-size: 0.825rem;
+  margin-top: 0.5rem;
+}
+
+.returned-note-banner {
+  background: #fffbeb;
+  border: 1px solid #fde047;
+  color: #b45309;
+  border-radius: 0.5rem;
+  padding: 0.6rem 0.85rem;
+  font-size: 0.825rem;
+  margin-top: 0.5rem;
+}
+
+/* Calendar Event Pills */
+.calendar-event-pill {
+  font-size: 0.7rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  margin-top: 0.2rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.calendar-event-pill.pill-due {
+  background-color: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fde047;
+}
+
+.calendar-event-pill.pill-blocked {
+  background-color: #fee2e2;
+  color: #991b1b;
+  border: 1px solid #fca5a5;
+}
+
+.calendar-event-pill.pill-downloaded {
+  background-color: #d1fae5;
+  color: #065f46;
+  border: 1px solid #6ee7b7;
+}
+
+/* Flatpickr 100% Thai Mini Calendar Custom Styling */
+.flatpickr-calendar {
+  border-radius: 0.85rem !important;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.15) !important;
+  border: 1px solid #e2e8f0 !important;
+  font-family: 'Prompt', 'Inter', sans-serif !important;
+  padding: 0.5rem !important;
+}
+
+.flatpickr-day.selected, .flatpickr-day.startRange, .flatpickr-day.endRange {
+  background: var(--primary) !important;
+  border-color: var(--primary) !important;
+  color: #ffffff !important;
+}
+
+.flatpickr-day:hover {
+  background: #eff6ff !important;
+}
+
+.flatpickr-months .flatpickr-month {
+  background: transparent !important;
+  color: var(--text-main) !important;
+  fill: var(--text-main) !important;
+}
+
+.flatpickr-current-month .flatpickr-monthDropdown-months {
+  font-weight: 700 !important;
+}
+
+.flatpickr-weekday {
+  color: var(--primary) !important;
+  font-weight: 700 !important;
+}
+
+
