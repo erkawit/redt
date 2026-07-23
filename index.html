@@ -752,6 +752,16 @@
       </div>
 
       <form onsubmit="saveGoogleSettings(event)">
+        <div style="background: #eff6ff; border: 1px solid #bfdbfe; padding: 1rem; border-radius: 0.75rem; margin-bottom: 1.25rem; font-size: 0.85rem; color: #1e40af;">
+          <div style="font-weight: 700; margin-bottom: 0.35rem;"><i class="fa-solid fa-circle-info"></i> ขั้นตอนการเชื่อมต่อ Google Apps Script Web App:</div>
+          <ol style="margin-left: 1.25rem; line-height: 1.5;">
+            <li>นำโค้ดจากไฟล์ <a href="file:///C:/Users/UDTC_COM/Documents/redt/Code.gs" target="_blank" style="color: #1d4ed8; font-weight: 700;">Code.gs</a> ไปวางใน Google Apps Script (https://script.google.com)</li>
+            <li>กด <b>Deploy -> New deployment</b> เลือกประเภทเป็น <b>Web app</b></li>
+            <li>ตั้งค่า Execute as: <b>Me</b> และ Who has access: <b>Anyone</b></li>
+            <li>คัดลอก Web App URL ที่ได้มาวางในช่องด้านล่างนี้ ระบบจะอ่านและบันทึกข้อมูลไปยัง Google Sheet จริงแบบ Live 100%</li>
+          </ol>
+        </div>
+
         <div class="form-group">
           <label for="googleSheetUrlInput"><i class="fa-solid fa-link"></i> Google Sheet Published CSV URL (สำหรับอ่านข้อมูล)</label>
           <input type="url" id="googleSheetUrlInput" class="form-control" placeholder="https://docs.google.com/spreadsheets/d/.../pub?output=csv">

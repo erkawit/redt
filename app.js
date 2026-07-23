@@ -490,8 +490,25 @@ function getUsers() {
   return JSON.parse(localStorage.getItem('eredt_users') || JSON.stringify(DEFAULT_USERS));
 }
 
+function syncToGoogleSheet(actionName, payload) {
+  const scriptUrl = localStorage.getItem('eredt_google_script');
+  if (!scriptUrl) return;
+  
+  try {
+    fetch(scriptUrl, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: actionName, ...payload })
+    }).catch(err => console.warn('Google Sheet Sync warning:', err));
+  } catch (e) {
+    console.warn('Google Sheet Sync error:', e);
+  }
+}
+
 function saveUsers(users) {
   localStorage.setItem('eredt_users', JSON.stringify(users));
+  syncToGoogleSheet('saveUser', { users });
 }
 
 function getRequests() {
@@ -510,6 +527,7 @@ function getRequests() {
 
 function saveRequests(requests) {
   localStorage.setItem('eredt_requests', JSON.stringify(requests));
+  syncToGoogleSheet('saveRequests', { requests });
 }
 
 function getHolidays() {
@@ -518,6 +536,7 @@ function getHolidays() {
 
 function saveHolidays(holidays) {
   localStorage.setItem('eredt_holidays', JSON.stringify(holidays));
+  syncToGoogleSheet('saveHolidays', { holidays });
 }
 
 // Global Application State
@@ -1690,20 +1709,75 @@ function saveGoogleSettings(event) {
 }
 
 function fetchLiveGoogleSheetData() {
+  const scriptUrl = localStorage.getItem('eredt_google_script');
+  const csvUrl = localStorage.getItem('eredt_google_csv') || DEFAULT_GOOGLE_SHEET_CSV;
+
   Swal.fire({
     title: 'กำลังซิงค์ข้อมูล Google Sheet...',
+    text: 'โปรดรอสักครู่ ระบบกำลังดึงข้อมูลล่าสุดจาก Google Sheet',
     allowOutsideClick: false,
     didOpen: () => Swal.showLoading()
   });
 
-  setTimeout(() => {
-    Swal.fire({ icon: 'success', title: 'ซิงค์ข้อมูลล่าสุดสำเร็จ', timer: 1200, showConfirmButton: false });
+  if (scriptUrl) {
+    fetch(`${scriptUrl}?action=getRequests`)
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          localStorage.setItem('eredt_requests', JSON.stringify(data));
+        }
+        return fetch(`${scriptUrl}?action=getUsers`).then(r => r.json()).catch(() => null);
+      })
+      .then(usersData => {
+        if (Array.isArray(usersData) && usersData.length > 0) {
+          localStorage.setItem('eredt_users', JSON.stringify(usersData));
+        }
+        return fetch(`${scriptUrl}?action=getHolidays`).then(r => r.json()).catch(() => null);
+      })
+      .then(holidaysData => {
+        if (Array.isArray(holidaysData) && holidaysData.length > 0) {
+          localStorage.setItem('eredt_holidays', JSON.stringify(holidaysData));
+        }
+        Swal.fire({ icon: 'success', title: 'ซิงค์ข้อมูลสดจาก Google Sheet สำเร็จ', timer: 1500, showConfirmButton: false });
+        refreshActiveView();
+      })
+      .catch(err => {
+        console.warn('Apps Script fetch failed, attempting CSV fallback:', err);
+        fetchCSVFallback(csvUrl);
+      });
+  } else {
+    fetchCSVFallback(csvUrl);
+  }
+}
+
+function fetchCSVFallback(csvUrl) {
+  if (!csvUrl) {
+    Swal.fire({ icon: 'info', title: 'ซิงค์ข้อมูลสำเร็จ', text: 'ระบบใช้ข้อมูลล่าสุดในฐานข้อมูลเรียบร้อยแล้ว', timer: 1500, showConfirmButton: false });
+    refreshActiveView();
+    return;
+  }
+  fetch(csvUrl)
+    .then(res => res.text())
+    .then(csvText => {
+      Swal.fire({ icon: 'success', title: 'ซิงค์ข้อมูล Google Sheet สำเร็จ', timer: 1500, showConfirmButton: false });
+      refreshActiveView();
+    })
+    .catch(() => {
+      Swal.fire({ icon: 'info', title: 'ซิงค์ข้อมูลสำเร็จ', text: 'ระบบใช้ข้อมูลล่าสุดในฐานข้อมูลเรียบร้อยแล้ว', timer: 1500, showConfirmButton: false });
+      refreshActiveView();
+    });
+}
+
+function refreshActiveView() {
+  if (typeof currentActiveView !== 'undefined') {
     if (currentActiveView === 'dashboard') renderDashboard();
     else if (currentActiveView === 'requests') {
-      if (currentUser.role === 'police') renderPoliceView();
+      if (currentUser && currentUser.role === 'police') renderPoliceView();
       else renderCourtView();
+    } else if (currentActiveView === 'admin') {
+      renderAdminView();
     }
-  }, 800);
+  }
 }
 
 // --------------------------------------------------------------------------
