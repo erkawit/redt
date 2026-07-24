@@ -1032,6 +1032,12 @@ table.data-table tr:hover td {
     display: block !important;
   }
 
+  /* Remove view header title icons on mobile (< 768px) */
+  .view-title h2 i,
+  .view-header h2 i {
+    display: none !important;
+  }
+
   .main-content {
     padding: 0.85rem 0.85rem 5.5rem 0.85rem !important;
   }
