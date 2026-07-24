@@ -47,7 +47,7 @@
         </div>
       </div>
       <button onclick="handleLogout()" class="btn-logout">
-        <i class="fa-solid fa-right-from-bracket"></i> ออกจากระบบ
+        <i class="fa-solid fa-right-from-bracket"></i> <span class="btn-logout-text">ออกจากระบบ</span>
       </button>
     </div>
   </header>
@@ -119,6 +119,31 @@
         <span style="color: var(--accent-gold);"><i class="fa-solid fa-gavel"></i> ศาลจังหวัดอุดรธานี</span>
       </div>
     </aside>
+
+    <!-- Mobile Fixed Bottom Bar Navigation (Icon Only + Active Hover State) -->
+    <nav id="mobileBottomNav" class="mobile-bottom-nav">
+      <button id="mbNavDashboard" onclick="switchView('dashboard', event)" class="bnav-item active" title="แดชบอร์ด & ปฏิทิน">
+        <i class="fa-solid fa-chart-line"></i>
+      </button>
+      <button id="mbNavRequests" onclick="switchView('requests', event)" class="bnav-item" title="รายการยื่นผัดฟ้องฝากขัง">
+        <i class="fa-solid fa-folder-open"></i>
+      </button>
+      <button id="mbNavQuickUpload" onclick="triggerMobileQuickUpload(event)" class="bnav-item center-action" style="display: none;" title="อัพโหลด PDF">
+        <i class="fa-solid fa-cloud-arrow-up"></i>
+      </button>
+      <button id="mbNavInbox" onclick="switchView('requests', event, 'inbox')" class="bnav-item" style="display: none;" title="กล่องจดหมายสถานี (รอรับคดี)">
+        <i class="fa-solid fa-inbox"></i>
+      </button>
+      <button id="mbNavCreateBatch" onclick="openCreateBatchModal(event)" class="bnav-item" style="display: none;" title="สร้างชุดเลขคำร้อง (ยฝ./ฝ.)">
+        <i class="fa-solid fa-file-signature"></i>
+      </button>
+      <button id="mbNavAdmin" onclick="switchView('admin', event)" class="bnav-item" style="display: none;" title="จัดการผู้ใช้งาน">
+        <i class="fa-solid fa-users-gear"></i>
+      </button>
+      <button onclick="handleLogout()" class="bnav-item" title="ออกจากระบบ">
+        <i class="fa-solid fa-right-from-bracket"></i>
+      </button>
+    </nav>
 
     <!-- Content Workspace -->
     <main class="main-content">
@@ -217,6 +242,19 @@
           <!-- Submission Time Window Status Banner -->
           <div id="timeWindowBanner" style="padding: 0.85rem 1.25rem; border-radius: 0.75rem; margin-bottom: 1.25rem; font-size: 0.875rem; font-weight: 600; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;">
             <!-- Rendered dynamically via app.js -->
+          </div>
+
+          <!-- Mobile Police Quick Upload Card -->
+          <div class="mobile-police-upload-card white-panel" style="padding: 1.1rem 1.25rem; margin-bottom: 1.25rem; background: linear-gradient(135deg, #1e3a8a, #1d4ed8); color: #ffffff;">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap;">
+              <div>
+                <h3 style="font-size: 1.05rem; font-weight: 700; color: #ffffff;"><i class="fa-solid fa-cloud-arrow-up" style="color: var(--accent-gold);"></i> อัพโหลดคำร้องส่งศาล (Mobile Quick Upload)</h3>
+                <p style="font-size: 0.8rem; color: #cbd5e1; margin-top: 0.2rem;">เลือกคดีและแนบไฟล์ PDF ยื่นศาลได้รวดเร็วทันทีจากมือถือ</p>
+              </div>
+              <button onclick="triggerMobileQuickUpload(event)" class="btn-primary" style="width: auto; background: var(--accent-gold); color: #0f172a !important; border: none; font-weight: 700; padding: 0.6rem 1rem;">
+                <i class="fa-solid fa-file-circle-plus" style="color: #0f172a !important;"></i> อัพโหลดไฟล์ PDF ทันที
+              </button>
+            </div>
           </div>
 
           <!-- Station Inbox (Unassigned cases matching station) -->

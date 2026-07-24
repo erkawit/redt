@@ -679,15 +679,92 @@ function checkSession() {
   }
 }
 
-function handleLogin(event) {
+async function handleLogin(event) {
   event.preventDefault();
   const username = document.getElementById('usernameInput').value.trim();
   const password = document.getElementById('passwordInput').value.trim();
 
-  const users = getUsers();
-  const user = users.find(u => u.username === username && u.password === password);
+  if (!username || !password) {
+    Swal.fire({
+      icon: 'warning',
+      title: 'กรุณากรอกข้อมูลให้ครบถ้วน',
+      text: 'โปรดกรอกชื่อผู้ใช้งานและรหัสผ่าน'
+    });
+    return;
+  }
+
+  // 1. Permanent Root System Admin check
+  if (username === 'admin' && password === 'caogikojt02') {
+    currentUser = SYSTEM_ROOT_ADMIN;
+    sessionStorage.setItem('eredt_session', JSON.stringify(currentUser));
+    Swal.fire({
+      icon: 'success',
+      title: 'เข้าสู่ระบบสำเร็จ',
+      text: `ยินดีต้อนรับ คุณ${currentUser.name}`,
+      timer: 1500,
+      showConfirmButton: false
+    });
+    renderAppLayout();
+    fetchLiveGoogleSheetData({ isAutoRefresh: true });
+    return;
+  }
+
+  // 2. Check local users first
+  let users = getUsers();
+  let user = users.find(u => u.username && u.username.toLowerCase() === username.toLowerCase() && String(u.password) === password);
+
+  // 3. If not found in local memory, check live Google Sheet!
+  if (!user) {
+    Swal.fire({
+      title: 'กำลังตรวจสอบบัญชีผู้ใช้...',
+      text: 'กำลังตรวจสอบข้อมูลกับ Google Sheet โปรดรอสักครู่',
+      allowOutsideClick: false,
+      didOpen: () => Swal.showLoading()
+    });
+
+    try {
+      const scriptUrl = localStorage.getItem('eredt_google_script');
+      const csvBaseUrl = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=users`;
+      let liveUsers = null;
+
+      if (scriptUrl && scriptUrl.trim() !== '') {
+        try {
+          const res = await fetch(`${scriptUrl}?action=getUsers`);
+          liveUsers = await res.json();
+        } catch (e) {
+          console.warn('Login live check Apps Script error:', e);
+        }
+      }
+
+      if (!liveUsers || !Array.isArray(liveUsers) || liveUsers.length === 0) {
+        try {
+          const csvText = await fetch(csvBaseUrl).then(r => r.text());
+          liveUsers = parseUsersCSV(csvText);
+        } catch (e) {
+          console.warn('Login live check CSV error:', e);
+        }
+      }
+
+      if (Array.isArray(liveUsers) && liveUsers.length > 0) {
+        saveUsers(liveUsers);
+        users = getUsers();
+        user = users.find(u => u.username && u.username.toLowerCase() === username.toLowerCase() && String(u.password) === password);
+      }
+    } catch (err) {
+      console.warn('Live login verification error:', err);
+    }
+  }
 
   if (user) {
+    if (user.status && user.status !== 'approved') {
+      Swal.fire({
+        icon: 'warning',
+        title: 'บัญชีผู้ใช้ยังไม่ได้รับอนุมัติ',
+        text: 'บัญชีของคุณอยู่ระหว่างการรออนุมัติสิทธิจากผู้ดูแลระบบ'
+      });
+      return;
+    }
+
     currentUser = user;
     sessionStorage.setItem('eredt_session', JSON.stringify(user));
     
@@ -704,7 +781,7 @@ function handleLogin(event) {
     Swal.fire({
       icon: 'error',
       title: 'เข้าสู่ระบบไม่สำเร็จ',
-      text: 'ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง'
+      text: 'ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง หรือไม่พบข้อมูลใน Google Sheet'
     });
   }
 }
@@ -772,6 +849,15 @@ function renderAppLayout() {
   document.getElementById('navItemUsers').style.display = (currentUser.role === 'admin') ? 'block' : 'none';
   document.getElementById('navItemGoogleSettings').style.display = (currentUser.role === 'admin') ? 'block' : 'none';
 
+  // Setup Mobile Bottom Nav items based on Role
+  const mbQuick = document.getElementById('mbNavQuickUpload');
+  const mbInbox = document.getElementById('mbNavInbox');
+  const mbAdmin = document.getElementById('mbNavAdmin');
+
+  if (mbQuick) mbQuick.style.display = (currentUser.role === 'police') ? 'flex' : 'none';
+  if (mbInbox) mbInbox.style.display = (currentUser.role === 'police') ? 'flex' : 'none';
+  if (mbAdmin) mbAdmin.style.display = (currentUser.role === 'admin') ? 'flex' : 'none';
+
   // Control Sync Button Visibility (Admin only)
   const btnSync = document.getElementById('btnSyncGoogleSheet');
   if (btnSync) {
@@ -813,14 +899,30 @@ function switchView(viewName, event, subTab) {
   document.getElementById('navItemRequests').classList.remove('active');
   if (document.getElementById('navItemUsersLink')) document.getElementById('navItemUsersLink').classList.remove('active');
 
+  // Clear Mobile Bottom Nav Active Classes
+  ['mbNavDashboard', 'mbNavRequests', 'mbNavQuickUpload', 'mbNavInbox', 'mbNavAdmin'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.remove('active');
+  });
+
   if (viewName === 'dashboard') {
     document.getElementById('dashboardView').style.display = 'block';
     document.getElementById('navItemDashboard').classList.add('active');
+    const mbDash = document.getElementById('mbNavDashboard');
+    if (mbDash) mbDash.classList.add('active');
     renderDashboard();
   } else if (viewName === 'requests') {
     document.getElementById('requestsView').style.display = 'block';
     document.getElementById('navItemRequests').classList.add('active');
     
+    if (subTab === 'inbox') {
+      const mbInb = document.getElementById('mbNavInbox');
+      if (mbInb) mbInb.classList.add('active');
+    } else {
+      const mbReq = document.getElementById('mbNavRequests');
+      if (mbReq) mbReq.classList.add('active');
+    }
+
     if (currentUser && currentUser.role === 'police') {
       document.getElementById('policeRequestsSection').style.display = 'block';
       document.getElementById('courtRequestsSection').style.display = 'none';
@@ -833,6 +935,8 @@ function switchView(viewName, event, subTab) {
   } else if (viewName === 'admin') {
     document.getElementById('adminView').style.display = 'block';
     if (document.getElementById('navItemUsersLink')) document.getElementById('navItemUsersLink').classList.add('active');
+    const mbAdm = document.getElementById('mbNavAdmin');
+    if (mbAdm) mbAdm.classList.add('active');
     renderAdminView();
   }
 }
@@ -1152,6 +1256,81 @@ function openUploadModal(caseNumber) {
   document.getElementById('submitRequestBtn').disabled = true;
 
   openModal('addRequestModal');
+}
+
+function triggerMobileQuickUpload(event) {
+  if (event) event.preventDefault();
+  if (!currentUser) return;
+
+  const rawRequests = getRequests();
+  const holidays = getHolidays();
+  const enriched = rawRequests.map(r => enrichCase(r, holidays));
+
+  // Find cases for police officer station that need upload
+  let pendingCases = enriched.filter(c => 
+    (!c.closed) && 
+    (!c.fileName || c.courtFlag) && 
+    (currentUser.role === 'police' ? (c.officer === currentUser.username || c.station === currentUser.station) : true)
+  );
+
+  if (pendingCases.length === 1) {
+    openUploadModal(pendingCases[0].caseNumber);
+    return;
+  }
+
+  if (pendingCases.length > 1) {
+    let optionsHtml = pendingCases.map(c => `
+      <div style="padding: 0.75rem; border: 1px solid #e2e8f0; border-radius: 0.6rem; margin-bottom: 0.5rem; text-align: left; display: flex; justify-content: space-between; align-items: center; background: #ffffff;">
+        <div>
+          <div style="font-weight: 700; color: var(--primary); font-size: 0.95rem;">${c.type} ${c.caseNumber} (ครั้งที่ ${c.k})</div>
+          <div style="font-size: 0.75rem; color: #b45309; margin-top: 0.15rem;"><i class="fa-solid fa-clock"></i> ยื่นภายใน: ${formatThaiDate(c.filingDeadline)}</div>
+        </div>
+        <button onclick="Swal.close(); openUploadModal('${c.caseNumber}');" class="btn-primary" style="width: auto; padding: 0.4rem 0.75rem; font-size: 0.8rem;">
+          <i class="fa-solid fa-cloud-arrow-up"></i> เลือกคดีนี้
+        </button>
+      </div>
+    `).join('');
+
+    Swal.fire({
+      title: 'เลือกคดีที่ต้องการอัพโหลด PDF',
+      html: `<div style="max-height: 320px; overflow-y: auto; margin-top: 0.5rem;">${optionsHtml}</div>`,
+      showConfirmButton: false,
+      showCloseButton: true
+    });
+    return;
+  }
+
+  let allUserCases = enriched.filter(c => 
+    !c.closed && 
+    (currentUser.role === 'police' ? (c.officer === currentUser.username || c.station === currentUser.station) : true)
+  );
+
+  if (allUserCases.length > 0) {
+    let optionsHtml = allUserCases.map(c => `
+      <div style="padding: 0.75rem; border: 1px solid #e2e8f0; border-radius: 0.6rem; margin-bottom: 0.5rem; text-align: left; display: flex; justify-content: space-between; align-items: center; background: #ffffff;">
+        <div>
+          <div style="font-weight: 700; color: var(--primary); font-size: 0.95rem;">${c.type} ${c.caseNumber} (ครั้งที่ ${c.k})</div>
+          <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.15rem;">สถานะ: ${c.fileName ? 'มีไฟล์อัพโหลดแล้ว' : 'ยังไม่มีไฟล์'}</div>
+        </div>
+        <button onclick="Swal.close(); openUploadModal('${c.caseNumber}');" class="btn-primary" style="width: auto; padding: 0.4rem 0.75rem; font-size: 0.8rem;">
+          <i class="fa-solid fa-cloud-arrow-up"></i> ${c.fileName ? 'อัพทับ' : 'อัพใหม่'}
+        </button>
+      </div>
+    `).join('');
+
+    Swal.fire({
+      title: 'เลือกคดีที่ต้องการอัพโหลด PDF',
+      html: `<div style="max-height: 320px; overflow-y: auto; margin-top: 0.5rem;">${optionsHtml}</div>`,
+      showConfirmButton: false,
+      showCloseButton: true
+    });
+  } else {
+    Swal.fire({
+      icon: 'info',
+      title: 'ไม่พบรายการคดี',
+      text: 'ขณะนี้ไม่มีคดีอยู่ในรายการรับผิดชอบของท่าน'
+    });
+  }
 }
 
 let rawSelectedFileObject = null;
