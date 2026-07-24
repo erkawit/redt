@@ -659,13 +659,24 @@ function checkSession() {
   initDatabase();
   const savedUser = sessionStorage.getItem('eredt_session');
   if (savedUser) {
-    currentUser = JSON.parse(savedUser);
+    try {
+      currentUser = JSON.parse(savedUser);
+    } catch (e) {
+      currentUser = null;
+    }
+  } else {
+    currentUser = null;
+  }
+
+  if (currentUser) {
     renderAppLayout();
+    // Only auto-sync live data from Google Sheet on refresh if user is logged in AND is ADMIN
+    if (currentUser.role === 'admin') {
+      fetchLiveGoogleSheetData({ isAutoRefresh: true });
+    }
   } else {
     showLoginView();
   }
-  // Auto-sync live data from Google Sheet on every page load / refresh
-  fetchLiveGoogleSheetData({ isAutoRefresh: true });
 }
 
 function handleLogin(event) {
@@ -810,7 +821,7 @@ function switchView(viewName, event, subTab) {
     document.getElementById('requestsView').style.display = 'block';
     document.getElementById('navItemRequests').classList.add('active');
     
-    if (currentUser.role === 'police') {
+    if (currentUser && currentUser.role === 'police') {
       document.getElementById('policeRequestsSection').style.display = 'block';
       document.getElementById('courtRequestsSection').style.display = 'none';
       renderPoliceView();
@@ -831,6 +842,7 @@ function switchView(viewName, event, subTab) {
 // --------------------------------------------------------------------------
 
 function renderDashboard() {
+  if (!currentUser) return;
   const rawRequests = getRequests();
   const holidays = getHolidays();
   const enrichedCases = rawRequests.map(r => enrichCase(r, holidays));
@@ -838,7 +850,7 @@ function renderDashboard() {
   let filteredCases = enrichedCases;
   if (currentUser.role === 'police') {
     filteredCases = enrichedCases.filter(c => c.officer === currentUser.username || c.station === currentUser.station);
-    document.getElementById('dashboardSubtitle').textContent = `ติดตามกำหนดเวลาสำหรับ สภ.: ${currentUser.station}`;
+    document.getElementById('dashboardSubtitle').textContent = `ติดตามกำหนดเวลาสำหรับ สภ.: ${currentUser.station || 'ไม่ระบุ'}`;
   } else {
     document.getElementById('dashboardSubtitle').textContent = `คำนวณวันยื่นล่วงหน้า 1 วันทำการและเวลาตัดยื่น 16.00 น. ตามระเบียบศาลจังหวัดอุดรธานี พ.ศ. 2569`;
   }
@@ -1001,6 +1013,7 @@ function openDayDetailModal(dayISO) {
 // --------------------------------------------------------------------------
 
 function renderPoliceView() {
+  if (!currentUser) return;
   updateTimeWindowBanner();
   document.getElementById('policeStationSub').textContent = `สังกัด: ${currentUser.station || 'ไม่ระบุ'}`;
 
@@ -1309,6 +1322,7 @@ function renderCourtView() {
 }
 
 function renderCourtRequestsTable() {
+  if (!currentUser) return;
   const stationFilter = (document.getElementById('courtStationFilter')?.value || '').trim();
   const statusFilter = (document.getElementById('courtStatusFilter')?.value || '').trim();
   const searchTerm = (document.getElementById('courtSearchInput')?.value || '').toLowerCase().trim();
@@ -1547,6 +1561,7 @@ function handleConfirmFlagWrongFile(event) {
 // --------------------------------------------------------------------------
 
 function renderAdminView() {
+  if (!currentUser || currentUser.role !== 'admin') return;
   const users = getUsers();
   const tbody = document.getElementById('adminUserTableBody');
   tbody.innerHTML = '';
@@ -2062,13 +2077,14 @@ async function fetchLiveGoogleSheetData(options = {}) {
 }
 
 function refreshActiveView() {
+  if (!currentUser) return;
   if (typeof currentActiveView !== 'undefined') {
     if (currentActiveView === 'dashboard') renderDashboard();
     else if (currentActiveView === 'requests') {
       if (currentUser && currentUser.role === 'police') renderPoliceView();
       else renderCourtView();
     } else if (currentActiveView === 'admin') {
-      renderAdminView();
+      if (currentUser && currentUser.role === 'admin') renderAdminView();
     }
   }
 }
