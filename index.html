@@ -190,11 +190,14 @@
         <!-- Interactive Calendar Panel -->
         <div class="white-panel calendar-wrapper">
           <div class="calendar-header">
-            <button class="calendar-nav-btn" onclick="changeMonth(-1)"><i class="fa-solid fa-chevron-left"></i></button>
-            <div class="calendar-title-group">
+            <button class="calendar-nav-btn" onclick="changeMonth(-1)" title="เดือนก่อนหน้า"><i class="fa-solid fa-chevron-left"></i></button>
+            <div class="calendar-title-group" style="display: flex; align-items: center; gap: 0.75rem;">
               <h3 id="calendarMonthTitle">กรกฎาคม 2569</h3>
+              <button onclick="resetCalendarToToday()" class="btn-secondary" style="padding: 0.2rem 0.6rem; font-size: 0.75rem; width: auto;" title="กลับไปยังวันที่ปัจจุบัน">
+                <i class="fa-solid fa-calendar-day" style="color: var(--accent-gold);"></i> วันนี้
+              </button>
             </div>
-            <button class="calendar-nav-btn" onclick="changeMonth(1)"><i class="fa-solid fa-chevron-right"></i></button>
+            <button class="calendar-nav-btn" onclick="changeMonth(1)" title="เดือนถัดไป"><i class="fa-solid fa-chevron-right"></i></button>
           </div>
 
           <div class="calendar-grid">

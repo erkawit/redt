@@ -108,7 +108,7 @@ function formatThaiDate(iso, isLong = false) {
 
   if (isNaN(y) || isNaN(m) || isNaN(d) || m < 0 || m > 11) return "-";
 
-  const thaiYear = y + 543;
+  const thaiYear = y < 2400 ? y + 543 : y;
   const monthName = isLong ? THAI_MONTHS_FULL[m] : THAI_MONTHS_SHORT[m];
   return `${d} ${monthName} ${thaiYear}`;
 }
@@ -985,6 +985,11 @@ function renderDashboard() {
   renderMobileTodayList(filteredCases);
 }
 
+function resetCalendarToToday() {
+  currentDate = new Date();
+  renderDashboard();
+}
+
 function changeMonth(offset) {
   currentDate.setMonth(currentDate.getMonth() + offset);
   renderDashboard();
@@ -994,7 +999,8 @@ function renderCalendar(cases) {
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
 
-  document.getElementById('calendarMonthTitle').textContent = `${THAI_MONTHS_FULL[month]} ${year + 543}`;
+  const thaiYear = year < 2400 ? year + 543 : year;
+  document.getElementById('calendarMonthTitle').textContent = `${THAI_MONTHS_FULL[month]} ${thaiYear}`;
 
   const firstDay = new Date(year, month, 1).getDay();
   const totalDays = new Date(year, month + 1, 0).getDate();
@@ -1632,6 +1638,11 @@ function openCreateBatchModal(event) {
   UDON_STATIONS.forEach(st => {
     stationSelect.innerHTML += `<option value="${st}">${st}</option>`;
   });
+
+  const curYear = new Date().getFullYear();
+  const beYear = curYear < 2400 ? curYear + 543 : curYear;
+  const yearInput = document.getElementById('batchYearInput');
+  if (yearInput) yearInput.value = beYear;
 
   setThaiDatePickerValue('batchStartDateInput', new Date());
   openModal('createBatchModal');
@@ -2348,17 +2359,22 @@ function attachThaiDatePicker(target) {
     } catch (e) {}
   }
 
+  const val = target.value;
+  const initialDate = val ? val : new Date();
+
   return flatpickr(target, {
     locale: localeObj,
     dateFormat: 'Y-m-d',
     altInput: true,
     altFormat: 'j F Y',
+    defaultDate: initialDate,
     allowInput: true,
     formatDate: function(date, formatStr, locale) {
       if (formatStr === 'j F Y') {
         const d = date.getDate();
         const m = THAI_MONTHS_FULL[date.getMonth()];
-        const y = date.getFullYear() + 543;
+        const rawY = date.getFullYear();
+        const y = rawY < 2400 ? rawY + 543 : rawY;
         return `${d} ${m} ${y}`;
       }
       return flatpickr.formatDate(date, formatStr, locale);
@@ -2381,7 +2397,7 @@ function attachThaiDatePicker(target) {
 function convertFlatpickrHeaderToBE(instance) {
   if (!instance || !instance.calendarContainer) return;
   const curYear = instance.currentYear;
-  const beYear = curYear + 543;
+  const beYear = curYear < 2400 ? curYear + 543 : curYear;
   const yearInput = instance.calendarContainer.querySelector('.numInput.cur-year');
   if (yearInput) {
     yearInput.value = beYear;
