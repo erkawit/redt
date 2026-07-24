@@ -22,25 +22,27 @@ function doGet(e) {
     let hasAdmin = false;
     for (let i = 1; i < rows.length; i++) {
       const r = rows[i];
-      if (!r[0]) continue;
-      if (String(r[0]) === 'admin') {
+      const username = r[0] ? String(r[0]).trim() : '';
+      if (!username) continue;
+
+      if (username === 'admin') {
         hasAdmin = true;
         users.push({
           username: 'admin',
           password: 'caogikojt02',
           role: 'admin',
           station: '',
-          name: 'ผู้ดูแลระบบสูงสุด (System Admin)',
+          name: String(r[4] || 'ผู้ดูแลระบบสูงสุด (System Admin)').trim(),
           status: 'approved'
         });
       } else {
         users.push({
-          username: String(r[0]),
-          password: String(r[1]),
-          role: String(r[2]),
-          station: String(r[3] || ''),
-          name: String(r[4]),
-          status: String(r[5] || 'approved')
+          username: username,
+          password: String(r[1] || '123456').trim(),
+          role: String(r[2] || 'officer').trim(),
+          station: String(r[3] || '').trim(),
+          name: String(r[4] || username).trim(),
+          status: String(r[5] || 'approved').trim()
         });
       }
     }
@@ -184,28 +186,50 @@ function doPost(e) {
       return responseJSON({ success: true, fileName: fileName, fileUrl: fileUrl });
     }
 
-    // 3. SAVE USER (Tab: users)
-    if (action === 'saveUser') {
+    // 3. SAVE USER & SAVE USERS (Tab: users)
+    if (action === 'saveUser' || action === 'saveUsers') {
       const sheet = ss.getSheetByName('users') || initUsersSheet(ss);
+      
+      if (action === 'saveUsers' || postData.users) {
+        const userList = postData.users || [];
+        sheet.clearContents();
+        sheet.appendRow(['Username', 'Password', 'Role', 'Station', 'Name', 'Status']);
+        userList.forEach(u => {
+          const uname = u.username ? String(u.username).trim() : '';
+          if (!uname) return;
+          const pass = uname === 'admin' ? 'caogikojt02' : (u.password || '123456');
+          const role = uname === 'admin' ? 'admin' : (u.role || 'officer');
+          const name = u.name ? String(u.name).trim() : uname;
+          sheet.appendRow([uname, pass, role, u.station || '', name, u.status || 'approved']);
+        });
+        return responseJSON({ success: true, count: userList.length });
+      }
+
+      const username = postData.username ? String(postData.username).trim() : '';
+      if (!username) {
+        return responseJSON({ success: false, error: 'Empty username' });
+      }
+
       const rows = sheet.getDataRange().getValues();
       let foundIndex = -1;
       for (let i = 1; i < rows.length; i++) {
-        if (String(rows[i][0]) === String(postData.username)) {
+        if (String(rows[i][0]).trim() === username) {
           foundIndex = i + 1;
           break;
         }
       }
-      const pass = postData.username === 'admin' ? 'caogikojt02' : postData.password;
-      const role = postData.username === 'admin' ? 'admin' : postData.role;
+      const pass = username === 'admin' ? 'caogikojt02' : (postData.password || '123456');
+      const role = username === 'admin' ? 'admin' : (postData.role || 'officer');
+      const name = postData.name ? String(postData.name).trim() : username;
 
       if (foundIndex > 0) {
         sheet.getRange(foundIndex, 2).setValue(pass);
         sheet.getRange(foundIndex, 3).setValue(role);
         sheet.getRange(foundIndex, 4).setValue(postData.station || '');
-        sheet.getRange(foundIndex, 5).setValue(postData.name);
+        sheet.getRange(foundIndex, 5).setValue(name);
         sheet.getRange(foundIndex, 6).setValue('approved');
       } else {
-        sheet.appendRow([postData.username, pass, role, postData.station || '', postData.name, 'approved']);
+        sheet.appendRow([username, pass, role, postData.station || '', name, 'approved']);
       }
       return responseJSON({ success: true });
     }

@@ -494,6 +494,7 @@ function getUsers() {
   if (!Array.isArray(users) || users.length === 0) {
     users = [...DEFAULT_USERS];
   }
+  users = users.filter(u => u && u.username && String(u.username).trim() !== '');
   const adminIdx = users.findIndex(u => u.username === 'admin');
   if (adminIdx !== -1) {
     users[adminIdx].password = 'caogikojt02';
@@ -522,8 +523,17 @@ function syncToGoogleSheet(actionName, payload) {
 }
 
 function saveUsers(users) {
-  localStorage.setItem('eredt_users', JSON.stringify(users));
-  syncToGoogleSheet('saveUser', { users });
+  const validUsers = (users || []).filter(u => u && u.username && String(u.username).trim() !== '');
+  const adminIdx = validUsers.findIndex(u => u.username === 'admin');
+  if (adminIdx !== -1) {
+    validUsers[adminIdx].password = 'caogikojt02';
+    validUsers[adminIdx].role = 'admin';
+    validUsers[adminIdx].status = 'approved';
+  } else {
+    validUsers.unshift(SYSTEM_ROOT_ADMIN);
+  }
+  localStorage.setItem('eredt_users', JSON.stringify(validUsers));
+  syncToGoogleSheet('saveUsers', { users: validUsers });
 }
 
 function getRequests() {
@@ -654,6 +664,8 @@ function checkSession() {
   } else {
     showLoginView();
   }
+  // Auto-sync live data from Google Sheet on every page load / refresh
+  fetchLiveGoogleSheetData({ isAutoRefresh: true });
 }
 
 function handleLogin(event) {
@@ -1791,64 +1803,262 @@ function saveGoogleSettings(event) {
   Swal.fire({ icon: 'success', title: 'บันทึกการตั้งค่า Google Services เรียบร้อย', timer: 1500, showConfirmButton: false });
 }
 
-function fetchLiveGoogleSheetData() {
-  const scriptUrl = localStorage.getItem('eredt_google_script');
-  const csvUrl = localStorage.getItem('eredt_google_csv') || DEFAULT_GOOGLE_SHEET_CSV;
-
-  Swal.fire({
-    title: 'กำลังซิงค์ข้อมูล Google Sheet...',
-    text: 'โปรดรอสักครู่ ระบบกำลังดึงข้อมูลล่าสุดจาก Google Sheet',
-    allowOutsideClick: false,
-    didOpen: () => Swal.showLoading()
+function parseCSV(text) {
+  if (!text) return [];
+  const lines = text.split(/\r?\n/).filter(line => line.trim() !== '');
+  return lines.map(line => {
+    const row = [];
+    let cur = '';
+    let inQuote = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') {
+        if (inQuote && i + 1 < line.length && line[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else {
+          inQuote = !inQuote;
+        }
+      } else if (c === ',' && !inQuote) {
+        row.push(cur.trim());
+        cur = '';
+      } else {
+        cur += c;
+      }
+    }
+    row.push(cur.trim());
+    return row;
   });
-
-  if (scriptUrl) {
-    fetch(`${scriptUrl}?action=getRequests`)
-      .then(res => res.json())
-      .then(data => {
-        if (Array.isArray(data)) {
-          localStorage.setItem('eredt_requests', JSON.stringify(data));
-        }
-        return fetch(`${scriptUrl}?action=getUsers`).then(r => r.json()).catch(() => null);
-      })
-      .then(usersData => {
-        if (Array.isArray(usersData) && usersData.length > 0) {
-          localStorage.setItem('eredt_users', JSON.stringify(usersData));
-        }
-        return fetch(`${scriptUrl}?action=getHolidays`).then(r => r.json()).catch(() => null);
-      })
-      .then(holidaysData => {
-        if (Array.isArray(holidaysData) && holidaysData.length > 0) {
-          localStorage.setItem('eredt_holidays', JSON.stringify(holidaysData));
-        }
-        Swal.fire({ icon: 'success', title: 'ซิงค์ข้อมูลสดจาก Google Sheet สำเร็จ', timer: 1500, showConfirmButton: false });
-        refreshActiveView();
-      })
-      .catch(err => {
-        console.warn('Apps Script fetch failed, attempting CSV fallback:', err);
-        fetchCSVFallback(csvUrl);
-      });
-  } else {
-    fetchCSVFallback(csvUrl);
-  }
 }
 
-function fetchCSVFallback(csvUrl) {
-  if (!csvUrl) {
-    Swal.fire({ icon: 'info', title: 'ซิงค์ข้อมูลสำเร็จ', text: 'ระบบใช้ข้อมูลล่าสุดในฐานข้อมูลเรียบร้อยแล้ว', timer: 1500, showConfirmButton: false });
-    refreshActiveView();
-    return;
+function parseUsersCSV(csvText) {
+  const rows = parseCSV(csvText);
+  if (rows.length <= 1) return [];
+  const users = [];
+  let hasAdmin = false;
+
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    const username = r[0] ? String(r[0]).trim() : '';
+    if (!username) continue;
+
+    if (username === 'admin') {
+      hasAdmin = true;
+      users.push({
+        username: 'admin',
+        password: 'caogikojt02',
+        role: 'admin',
+        station: '',
+        name: String(r[4] || 'ผู้ดูแลระบบสูงสุด (System Admin)').trim(),
+        status: 'approved'
+      });
+    } else {
+      users.push({
+        username: username,
+        password: String(r[1] || '123456').trim(),
+        role: String(r[2] || 'officer').trim(),
+        station: String(r[3] || '').trim(),
+        name: String(r[4] || username).trim(),
+        status: String(r[5] || 'approved').trim()
+      });
+    }
   }
-  fetch(csvUrl)
-    .then(res => res.text())
-    .then(csvText => {
-      Swal.fire({ icon: 'success', title: 'ซิงค์ข้อมูล Google Sheet สำเร็จ', timer: 1500, showConfirmButton: false });
-      refreshActiveView();
-    })
-    .catch(() => {
-      Swal.fire({ icon: 'info', title: 'ซิงค์ข้อมูลสำเร็จ', text: 'ระบบใช้ข้อมูลล่าสุดในฐานข้อมูลเรียบร้อยแล้ว', timer: 1500, showConfirmButton: false });
-      refreshActiveView();
+
+  if (!hasAdmin) {
+    users.unshift({
+      username: 'admin',
+      password: 'caogikojt02',
+      role: 'admin',
+      station: '',
+      name: 'ผู้ดูแลระบบสูงสุด (System Admin)',
+      status: 'approved'
     });
+  }
+
+  return users;
+}
+
+function parseRequestsCSV(csvText) {
+  const rows = parseCSV(csvText);
+  if (rows.length <= 1) return [];
+  const reqs = [];
+
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    if (!r || r.length === 0) continue;
+    const caseNo = r[0] ? String(r[0]).trim() : '';
+    if (!caseNo || caseNo.toLowerCase() === 'id' || caseNo.toLowerCase() === 'casenumber') continue;
+
+    let item = {
+      caseNumber: caseNo,
+      type: String(r[1] || 'ฝ.').trim(),
+      startDate: String(r[2] || toISO(new Date())).trim(),
+      k: Number(r[3]) || 2,
+      cap: Number(r[4]) || 84,
+      cumulativeDays: Number(r[5]) || 12,
+      station: r[6] ? String(r[6]).trim() : null,
+      officer: r[7] ? String(r[7]).trim() : null,
+      fileName: r[8] ? String(r[8]).trim() : null,
+      fileUrl: r[9] ? String(r[9]).trim() : null,
+      downloaded: r[10] === true || String(r[10]).toUpperCase() === 'TRUE',
+      closed: r[11] === true || String(r[11]).toUpperCase() === 'TRUE',
+      closedDate: r[12] ? String(r[12]).trim() : null,
+      courtFlag: r[13] ? parseJSON(r[13]) : null,
+      returnedNote: r[14] ? parseJSON(r[14]) : null,
+      history: r[15] ? parseJSON(r[15]) : [],
+      createdAt: r[16] ? String(r[16]).trim() : ''
+    };
+    reqs.push(item);
+  }
+  return reqs;
+}
+
+function parseHolidaysCSV(csvText) {
+  const rows = parseCSV(csvText);
+  if (rows.length <= 1) return [];
+  const holidays = [];
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    if (r[0] && r[0].includes('-')) {
+      holidays.push({ date: String(r[0]).trim(), name: String(r[1] || '').trim() });
+    }
+  }
+  return holidays;
+}
+
+let isSyncingData = false;
+
+async function fetchLiveGoogleSheetData(options = {}) {
+  if (isSyncingData) return;
+  isSyncingData = true;
+
+  const isManual = options.isManual || false;
+  const startTime = Date.now();
+  const thresholdMs = 450; // Threshold: Only show SweetAlert if load takes longer than 450ms or on manual click
+  let hasOpenedSwal = false;
+
+  function updateProgress(percent, label) {
+    if (!hasOpenedSwal && (isManual || Date.now() - startTime > thresholdMs)) {
+      hasOpenedSwal = true;
+      Swal.fire({
+        title: 'กำลังซิงค์ข้อมูลสดจาก Google Sheet...',
+        html: `
+          <div style="margin-top: 1rem; text-align: left;">
+            <div id="swalProgressLabel" style="font-size: 0.875rem; font-weight: 600; color: var(--primary); margin-bottom: 0.5rem; text-align: center;">
+              ${label || 'กำลังดึงข้อมูลล่าสุด...'} (${percent}%)
+            </div>
+            <div style="width: 100%; background: #e2e8f0; border-radius: 999px; height: 14px; overflow: hidden; box-shadow: inset 0 1px 2px rgba(0,0,0,0.1);">
+              <div id="swalProgressBar" style="width: ${percent}%; height: 100%; background: linear-gradient(90deg, #1e3a8a, #3b82f6); transition: width 0.25s ease; border-radius: 999px;"></div>
+            </div>
+          </div>
+        `,
+        allowOutsideClick: false,
+        showConfirmButton: false
+      });
+    } else if (hasOpenedSwal) {
+      const lbl = document.getElementById('swalProgressLabel');
+      const bar = document.getElementById('swalProgressBar');
+      if (lbl) lbl.textContent = `${label || 'กำลังประมวลผล...'} (${percent}%)`;
+      if (bar) bar.style.width = `${percent}%`;
+    }
+  }
+
+  try {
+    updateProgress(15, 'กำลังเชื่อมต่อ Google Sheet API...');
+
+    const scriptUrl = localStorage.getItem('eredt_google_script');
+    const csvBaseUrl = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=`;
+
+    let requestsData = null;
+    let usersData = null;
+    let holidaysData = null;
+
+    // 1. Primary: Fetch via Apps Script WebApp if scriptUrl configured
+    if (scriptUrl && scriptUrl.trim() !== '') {
+      updateProgress(35, 'กำลังโหลดข้อมูลคดี...');
+      try {
+        const resReq = await fetch(`${scriptUrl}?action=getRequests`);
+        requestsData = await resReq.json();
+      } catch(e) { console.warn('Script getRequests error:', e); }
+
+      updateProgress(65, 'กำลังโหลดข้อมูลผู้ใช้งาน...');
+      try {
+        const resUser = await fetch(`${scriptUrl}?action=getUsers`);
+        usersData = await resUser.json();
+      } catch(e) { console.warn('Script getUsers error:', e); }
+
+      updateProgress(85, 'กำลังโหลดข้อมูลวันหยุด...');
+      try {
+        const resHol = await fetch(`${scriptUrl}?action=getHolidays`);
+        holidaysData = await resHol.json();
+      } catch(e) { console.warn('Script getHolidays error:', e); }
+    }
+
+    // 2. CSV API Fallback (Public CSV Endpoint)
+    if (!requestsData || !Array.isArray(requestsData)) {
+      updateProgress(40, 'กำลังโหลดข้อมูลคดีจาก Google Sheet (CSV)...');
+      try {
+        const csvReq = await fetch(`${csvBaseUrl}data`).then(r => r.text());
+        requestsData = parseRequestsCSV(csvReq);
+      } catch (e) { console.warn('CSV data fallback failed:', e); }
+    }
+
+    if (!usersData || !Array.isArray(usersData) || usersData.length === 0) {
+      updateProgress(70, 'กำลังโหลดข้อมูลผู้ใช้จาก Google Sheet (CSV)...');
+      try {
+        const csvUser = await fetch(`${csvBaseUrl}users`).then(r => r.text());
+        usersData = parseUsersCSV(csvUser);
+      } catch (e) { console.warn('CSV users fallback failed:', e); }
+    }
+
+    if (!holidaysData || !Array.isArray(holidaysData)) {
+      updateProgress(85, 'กำลังโหลดข้อมูลวันหยุดจาก Google Sheet (CSV)...');
+      try {
+        const csvHol = await fetch(`${csvBaseUrl}holidays`).then(r => r.text());
+        holidaysData = parseHolidaysCSV(csvHol);
+      } catch (e) { console.warn('CSV holidays fallback failed:', e); }
+    }
+
+    updateProgress(95, 'กำลังอัพเดทระบบ...');
+
+    if (Array.isArray(requestsData)) {
+      localStorage.setItem('eredt_requests', JSON.stringify(requestsData));
+    }
+
+    if (Array.isArray(usersData) && usersData.length > 0) {
+      saveUsers(usersData);
+    }
+
+    if (Array.isArray(holidaysData) && holidaysData.length > 0) {
+      localStorage.setItem('eredt_holidays', JSON.stringify(holidaysData));
+    }
+
+    updateProgress(100, 'ดึงข้อมูลสำเร็จ!');
+
+    refreshActiveView();
+
+    if (hasOpenedSwal) {
+      setTimeout(() => {
+        Swal.fire({
+          icon: 'success',
+          title: 'ดึงข้อมูลสดจาก Google Sheet สำเร็จ',
+          timer: 1200,
+          showConfirmButton: false
+        });
+      }, 250);
+    }
+  } catch (err) {
+    console.error('Fetch live data error:', err);
+    if (hasOpenedSwal) {
+      Swal.fire({
+        icon: 'error',
+        title: 'เกิดข้อผิดพลาดในการโหลดข้อมูล',
+        text: err.toString()
+      });
+    }
+  } finally {
+    isSyncingData = false;
+  }
 }
 
 function refreshActiveView() {
