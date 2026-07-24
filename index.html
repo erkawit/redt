@@ -220,6 +220,19 @@
           </div>
         </div>
 
+        <!-- Mobile Today ListView Panel (< 768px Only) -->
+        <div id="mobileTodayListViewPanel" class="white-panel mobile-today-panel" style="display: none; padding: 1.25rem;">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; border-bottom: 1px solid #e2e8f0; padding-bottom: 0.75rem;">
+            <h3 style="font-size: 1.05rem; font-weight: 700; color: var(--primary); margin: 0;">
+              <i class="fa-solid fa-calendar-day" style="color: var(--accent-gold);"></i> รายการผัดฟ้องฝากขังประจำวันนี้
+            </h3>
+            <span id="mobileTodayDateBadge" class="badge badge-status-due">วันนี้</span>
+          </div>
+          <div id="mobileTodayListViewBody">
+            <!-- Rendered via app.js -->
+          </div>
+        </div>
+
       </div>
 
       <!-- 2. REQUESTS LIST VIEW -->

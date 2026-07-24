@@ -968,6 +968,7 @@ function renderDashboard() {
   document.getElementById('dashStatDownloaded').textContent = downloadedCases.length;
 
   renderCalendar(filteredCases);
+  renderMobileTodayList(filteredCases);
 }
 
 function changeMonth(offset) {
@@ -1210,6 +1211,11 @@ function renderPoliceTable() {
       }
 
       const tr = document.createElement('tr');
+      tr.onclick = (e) => {
+        if (window.innerWidth <= 768 && !e.target.closest('button')) {
+          openMobileCaseActionModal(c.caseNumber);
+        }
+      };
       tr.innerHTML = `
         <td>${typeBadge}</td>
         <td><b>${c.caseNumber}</b></td>
@@ -1565,6 +1571,11 @@ function renderCourtRequestsTable() {
       }
 
       const tr = document.createElement('tr');
+      tr.onclick = (e) => {
+        if (window.innerWidth <= 768 && !e.target.closest('button') && !e.target.closest('a')) {
+          openMobileCaseActionModal(c.caseNumber);
+        }
+      };
       tr.innerHTML = `
         <td>${typeBadge}</td>
         <td><b>${c.caseNumber}</b></td>
@@ -1753,6 +1764,11 @@ function renderAdminView() {
     };
 
     const tr = document.createElement('tr');
+    tr.onclick = (e) => {
+      if (window.innerWidth <= 768 && !e.target.closest('button')) {
+        openMobileUserActionModal(u.username);
+      }
+    };
     tr.innerHTML = `
       <td><b>${u.username}</b></td>
       <td>${u.name}</td>
@@ -2387,6 +2403,170 @@ function openModal(modalId) {
 function closeModal(modalId) {
   const el = document.getElementById(modalId);
   if (el) el.classList.remove('active');
+}
+
+function renderMobileTodayList(cases) {
+  const container = document.getElementById('mobileTodayListViewBody');
+  const badge = document.getElementById('mobileTodayDateBadge');
+  if (!container) return;
+
+  const todayISO = toISO(new Date());
+  if (badge) badge.textContent = formatThaiDate(todayISO, true);
+
+  const todayCases = cases.filter(c => !c.closed && (c.filingDeadline === todayISO || c.legalDeadline === todayISO));
+  container.innerHTML = '';
+
+  if (todayCases.length === 0) {
+    container.innerHTML = `
+      <div style="text-align: center; color: var(--text-muted); padding: 1.5rem; background: #f8fafc; border-radius: 0.75rem; border: 1px dashed #cbd5e1;">
+        <i class="fa-solid fa-circle-check" style="font-size: 2rem; color: #10b981; margin-bottom: 0.5rem;"></i>
+        <div style="font-weight: 600; color: #334155;">ไม่มีรายการผัดฟ้องฝากขังที่ต้องยื่นในวันนี้</div>
+        <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.2rem;">${formatThaiDate(todayISO, true)}</div>
+      </div>
+    `;
+  } else {
+    todayCases.forEach(c => {
+      const typeBadge = c.type === 'ยฝ.' ? '<span class="badge badge-type-yf">ยฝ.</span>' : '<span class="badge badge-type-f">ฝ.</span>';
+      const item = document.createElement('div');
+      item.className = 'mobile-today-item';
+      item.style.cssText = `
+        padding: 0.85rem 2.6rem 0.85rem 1rem;
+        margin-bottom: 0.65rem;
+        border: 1px solid #e2e8f0;
+        border-radius: 0.75rem;
+        background: #ffffff;
+        position: relative;
+        cursor: pointer;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+      `;
+      item.onclick = () => openMobileCaseActionModal(c.caseNumber);
+      item.innerHTML = `
+        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
+          ${typeBadge} <b>${c.caseNumber}</b> (ครั้งที่ ${c.k})
+        </div>
+        <div style="font-size: 0.8rem; color: #64748b;">สภ. ${c.station || 'ไม่ระบุ'} | ครบกำหนด: ${formatThaiDate(c.legalDeadline)}</div>
+        <div style="margin-top: 0.35rem;">${renderStatusBadge(c.status)}</div>
+        <i class="fa-solid fa-chevron-right" style="position: absolute; right: 1.1rem; top: 50%; transform: translateY(-50%); color: var(--primary); font-size: 1rem;"></i>
+      `;
+      container.appendChild(item);
+    });
+  }
+}
+
+function openMobileCaseActionModal(caseNumber) {
+  const requests = getRequests();
+  const holidays = getHolidays();
+  const c = requests.find(r => r.caseNumber === caseNumber);
+  if (!c) return;
+
+  const enriched = enrichCase(c, holidays);
+  const typeBadge = enriched.type === 'ยฝ.' ? '<span class="badge badge-type-yf">ยฝ.</span>' : '<span class="badge badge-type-f">ฝ.</span>';
+
+  let actionButtonsHtml = '';
+
+  if (currentUser && currentUser.role === 'police') {
+    if (!enriched.officer && enriched.station === currentUser.station) {
+      actionButtonsHtml += `
+        <button onclick="Swal.close(); claimForMe('${enriched.caseNumber}');" class="btn-primary" style="width: 100%; margin-bottom: 0.5rem;">
+          <i class="fa-solid fa-hand-holding-hand"></i> รับเป็นเจ้าของคดี
+        </button>
+      `;
+    }
+    if (enriched.officer === currentUser.username && !enriched.closed) {
+      const timeCheck = checkTimeWindow();
+      const isPast = isPastCutoff(enriched.filingDeadline);
+      if (timeCheck.allowed && !isPast) {
+        actionButtonsHtml += `
+          <button onclick="Swal.close(); openUploadModal('${enriched.caseNumber}');" class="btn-primary" style="width: 100%; margin-bottom: 0.5rem;">
+            <i class="fa-solid fa-upload"></i> ${enriched.fileName ? 'อัพโหลดไฟล์ใหม่ทับ' : 'อัพโหลด PDF'}
+          </button>
+        `;
+        if (!enriched.history || enriched.history.length === 0) {
+          actionButtonsHtml += `
+            <button onclick="Swal.close(); openReturnModal('${enriched.caseNumber}');" class="btn-secondary" style="width: 100%; background-color: #d97706; border-color: #d97706; color: #fff; margin-bottom: 0.5rem;">
+              <i class="fa-solid fa-rotate-left"></i> คืนสำนวน
+            </button>
+          `;
+        }
+      }
+    }
+  } else {
+    if (enriched.fileName) {
+      actionButtonsHtml += `
+        <button onclick="Swal.close(); downloadCourtFile('${enriched.caseNumber}');" class="btn-secondary" style="width: 100%; margin-bottom: 0.5rem;">
+          <i class="fa-solid fa-file-pdf" style="color: #dc2626;"></i> เปิด/ดาวน์โหลดไฟล์ ${enriched.fileName}
+        </button>
+      `;
+    }
+    if (!enriched.closed) {
+      const canReceive = enriched.fileName && enriched.downloaded && !enriched.courtFlag;
+      actionButtonsHtml += `
+        <button onclick="Swal.close(); openReceiveModal('${enriched.caseNumber}');" class="btn-primary" style="width: 100%; background-color: #059669; border-color: #059669; margin-bottom: 0.5rem;" ${canReceive ? '' : 'disabled'}>
+          <i class="fa-solid fa-check-double"></i> ยืนยันรับเรื่อง
+        </button>
+      `;
+      if (enriched.fileName) {
+        actionButtonsHtml += `
+          <button onclick="Swal.close(); openFlagModal('${enriched.caseNumber}');" class="btn-secondary" style="width: 100%; background-color: #dc2626; border-color: #dc2626; color: #fff; margin-bottom: 0.5rem;">
+            <i class="fa-solid fa-flag"></i> แจ้งไฟล์ผิด
+          </button>
+        `;
+      }
+    }
+  }
+
+  Swal.fire({
+    title: `${typeBadge} <b>${enriched.caseNumber}</b>`,
+    html: `
+      <div style="text-align: left; font-size: 0.875rem; color: #334155; line-height: 1.6; background: #f8fafc; padding: 1rem; border-radius: 0.75rem; margin-bottom: 1rem;">
+        <div><b>ครั้งที่ยื่น:</b> ครั้งที่ ${enriched.k}</div>
+        <div><b>สังกัด สภ.:</b> ${enriched.station || 'รอกำหนด'}</div>
+        <div><b>พนักงานสอบสวน:</b> ${enriched.officer || '-'}</div>
+        <div><b>ต้องยื่นคำร้องภายใน:</b> <b style="color: #b45309;">${formatThaiDate(enriched.filingDeadline)}</b> (16:00 น.)</div>
+        <div><b>วันครบกำหนดจริง:</b> ${formatThaiDate(enriched.legalDeadline)}</div>
+        <div style="margin-top: 0.5rem;"><b>สถานะคดี:</b> ${renderStatusBadge(enriched.status)}</div>
+        ${enriched.returnedNote ? `<div style="margin-top: 0.5rem; color: #b45309;"><b>หมายเหตุคืนสำนวน:</b> ${enriched.returnedNote.reason}</div>` : ''}
+        ${enriched.courtFlag ? `<div style="margin-top: 0.5rem; color: #dc2626;"><b>ศาลแจ้งไฟล์ผิด:</b> ${enriched.courtFlag.reason}</div>` : ''}
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 0.3rem;">
+        ${actionButtonsHtml || '<div style="color: #64748b; font-size: 0.85rem;">ไม่มีปุ่มการดำเนินการในขณะนี้</div>'}
+      </div>
+    `,
+    showConfirmButton: false,
+    showCloseButton: true
+  });
+}
+
+function openMobileUserActionModal(username) {
+  const users = getUsers();
+  const u = users.find(x => x.username === username);
+  if (!u) return;
+
+  const roleNames = { admin: 'Admin (ผู้ดูแลระบบ)', officer: 'เจ้าหน้าที่ศาล', police: 'ตำรวจ' };
+
+  Swal.fire({
+    title: `ผู้ใช้งาน: ${u.username}`,
+    html: `
+      <div style="text-align: left; font-size: 0.875rem; color: #334155; line-height: 1.6; background: #f8fafc; padding: 1rem; border-radius: 0.75rem; margin-bottom: 1rem;">
+        <div><b>ชื่อ-สกุล:</b> ${u.name || '-'}</div>
+        <div><b>บทบาท:</b> ${roleNames[u.role] || u.role}</div>
+        <div><b>สถานีตำรวจ:</b> ${u.station || '-'}</div>
+        <div><b>สถานะ:</b> อนุมัติแล้ว</div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+        <button onclick="Swal.close(); editUser('${u.username}');" class="btn-secondary" style="width: 100%;">
+          <i class="fa-solid fa-pen-to-square"></i> แก้ไขข้อมูลผู้ใช้
+        </button>
+        ${u.username !== 'admin' ? `
+          <button onclick="Swal.close(); deleteUser('${u.username}');" class="btn-secondary" style="width: 100%; background-color: #dc2626; color: #fff;">
+            <i class="fa-solid fa-trash"></i> ลบบัญชีผู้ใช้
+          </button>
+        ` : ''}
+      </div>
+    `,
+    showConfirmButton: false,
+    showCloseButton: true
+  });
 }
 
 // --------------------------------------------------------------------------
