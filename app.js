@@ -590,7 +590,8 @@ function checkTimeWindow() {
   const isWeekday = (day >= 1 && day <= 5);
   const isWithinTime = (totalMinutes >= startWindow && totalMinutes <= endWindow);
 
-  const formattedTime = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')} น.`;
+  const second = thaiDate.getSeconds();
+  const formattedTime = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')} น.`;
   const dayNames = ['วันอาทิตย์', 'วันจันทร์', 'วันอังคาร', 'วันพุธ', 'วันพฤหัสบดี', 'วันศุกร์', 'วันเสาร์'];
 
   if (!isWeekday) {
@@ -616,38 +617,51 @@ function checkTimeWindow() {
   };
 }
 
+let liveClockInterval = null;
+
+function startLiveClock() {
+  if (liveClockInterval) clearInterval(liveClockInterval);
+  updateTimeWindowBanner();
+  liveClockInterval = setInterval(updateTimeWindowBanner, 1000);
+}
+
 function updateTimeWindowBanner() {
   const banner = document.getElementById('timeWindowBanner');
   if (!banner) return;
 
   const timeCheck = checkTimeWindow();
+  const clockSpan = document.getElementById('bannerLiveClock');
 
-  if (timeCheck.isOpen) {
-    banner.style.background = '#d1fae5';
-    banner.style.border = '1px solid #a7f3d0';
-    banner.style.color = '#047857';
-    banner.innerHTML = `
-      <div>
-        <i class="fa-solid fa-circle-check" style="color: #059669; font-size: 1.1rem; margin-right: 0.35rem;"></i>
-        <b>สถานะระบบ: เปิดรับคำร้องยื่นผัดฟ้องฝากขัง</b> (ช่วงเวลา 08.30 - 16.00 น. จันทร์ - ศุกร์)
-      </div>
-      <div style="font-size: 0.8rem; background: #047857; color: #ffffff; padding: 0.2rem 0.6rem; border-radius: 999px;">
-        เวลาปัจจุบัน: ${timeCheck.timeStr}
-      </div>
-    `;
+  if (!clockSpan) {
+    if (timeCheck.isOpen) {
+      banner.style.background = '#d1fae5';
+      banner.style.border = '1px solid #a7f3d0';
+      banner.style.color = '#047857';
+      banner.innerHTML = `
+        <div>
+          <i class="fa-solid fa-circle-check" style="color: #059669; font-size: 1.1rem; margin-right: 0.35rem;"></i>
+          <b>สถานะระบบ: เปิดรับคำร้องยื่นผัดฟ้องฝากขัง</b> (ช่วงเวลา 08.30 - 16.00 น. จันทร์ - ศุกร์)
+        </div>
+        <div style="font-size: 0.8rem; background: #047857; color: #ffffff; padding: 0.2rem 0.65rem; border-radius: 999px; font-weight: 600; white-space: nowrap;">
+          เวลาปัจจุบัน: <span id="bannerLiveClock">${timeCheck.timeStr}</span>
+        </div>
+      `;
+    } else {
+      banner.style.background = '#fee2e2';
+      banner.style.border = '1px solid #fca5a5';
+      banner.style.color = '#991b1b';
+      banner.innerHTML = `
+        <div>
+          <i class="fa-solid fa-circle-xmark" style="color: #dc2626; font-size: 1.1rem; margin-right: 0.35rem;"></i>
+          <b>สถานะระบบ: ปิดรับคำร้องทางระบบ</b> (${timeCheck.reason})
+        </div>
+        <div style="font-size: 0.8rem; background: #dc2626; color: #ffffff; padding: 0.2rem 0.65rem; border-radius: 999px; font-weight: 600; white-space: nowrap;">
+          เวลาปัจจุบัน: <span id="bannerLiveClock">${timeCheck.timeStr}</span>
+        </div>
+      `;
+    }
   } else {
-    banner.style.background = '#fee2e2';
-    banner.style.border = '1px solid #fca5a5';
-    banner.style.color = '#991b1b';
-    banner.innerHTML = `
-      <div>
-        <i class="fa-solid fa-circle-xmark" style="color: #dc2626; font-size: 1.1rem; margin-right: 0.35rem;"></i>
-        <b>สถานะระบบ: ปิดรับคำร้องทางระบบ</b> (${timeCheck.reason})
-      </div>
-      <div style="font-size: 0.8rem; background: #dc2626; color: #ffffff; padding: 0.2rem 0.6rem; border-radius: 999px;">
-        เวลาปัจจุบัน: ${timeCheck.timeStr}
-      </div>
-    `;
+    clockSpan.textContent = timeCheck.timeStr;
   }
 }
 
@@ -1119,7 +1133,7 @@ function openDayDetailModal(dayISO) {
 
 function renderPoliceView() {
   if (!currentUser) return;
-  updateTimeWindowBanner();
+  startLiveClock();
   document.getElementById('policeStationSub').textContent = `สังกัด: ${currentUser.station || 'ไม่ระบุ'}`;
 
   const rawRequests = getRequests();

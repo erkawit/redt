@@ -117,12 +117,43 @@ function doPost(e) {
     const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
 
     // 1. SAVE ALL REQUESTS (Tab: data)
-    if (action === 'saveRequests' || action === 'createRequest') {
-      const sheet = ss.getSheetByName('data') || initRequestsSheet(ss);
+    if (action === 'saveRequests' || action === 'createRequest' || action === 'deleteRequest') {
+      const sheet = ss.getSheetByName('data') || ss.getSheetByName('requests') || initRequestsSheet(ss);
+      const oldRows = sheet.getDataRange().getValues();
+      
+      const reqList = postData.requests || [];
+      if (action === 'createRequest' && postData.caseNumber) {
+        reqList.push(postData);
+      }
+
+      // Automatically delete/trash associated PDF files in Google Drive when a data case is removed
+      if (oldRows && oldRows.length > 1) {
+        const newCaseNumbers = new Set(reqList.map(r => String(r.caseNumber || r.detentionNo || '').trim()));
+        for (let i = 1; i < oldRows.length; i++) {
+          const oldCaseNum = String(oldRows[i][0] || '').trim();
+          const oldFileUrl = String(oldRows[i][9] || '').trim();
+          
+          if (oldCaseNum && (!newCaseNumbers.has(oldCaseNum) || (action === 'deleteRequest' && postData.caseNumber === oldCaseNum)) && oldFileUrl) {
+            try {
+              let fileId = null;
+              const match1 = oldFileUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+              const match2 = oldFileUrl.match(/id=([a-zA-Z0-9_-]+)/);
+              if (match1) fileId = match1[1];
+              else if (match2) fileId = match2[1];
+
+              if (fileId) {
+                DriveApp.getFileById(fileId).setTrashed(true);
+              }
+            } catch (errDrive) {
+              Logger.log('Warning trashing Drive file for case ' + oldCaseNum + ': ' + errDrive);
+            }
+          }
+        }
+      }
+
       sheet.clearContents();
       sheet.appendRow(['CaseNumber', 'Type', 'StartDate', 'K', 'Cap', 'CumulativeDays', 'Station', 'Officer', 'FileName', 'FileUrl', 'Downloaded', 'Closed', 'ClosedDate', 'CourtFlag', 'ReturnedNote', 'History', 'CreatedAt']);
       
-      const reqList = postData.requests || [postData];
       reqList.forEach(item => {
         if (!item.caseNumber && item.detentionNo) item.caseNumber = item.detentionNo;
         if (!item.caseNumber) return;
@@ -141,9 +172,9 @@ function doPost(e) {
           item.downloaded || false,
           item.closed || false,
           item.closedDate || '',
-          item.courtFlag ? JSON.stringify(item.courtFlag) : '',
-          item.returnedNote ? JSON.stringify(item.returnedNote) : '',
-          item.history ? JSON.stringify(item.history) : '[]',
+          item.courtFlag ? (typeof item.courtFlag === 'string' ? item.courtFlag : JSON.stringify(item.courtFlag)) : '',
+          item.returnedNote ? (typeof item.returnedNote === 'string' ? item.returnedNote : JSON.stringify(item.returnedNote)) : '',
+          item.history ? (typeof item.history === 'string' ? item.history : JSON.stringify(item.history)) : '[]',
           item.createdAt || new Date().toISOString()
         ]);
       });
